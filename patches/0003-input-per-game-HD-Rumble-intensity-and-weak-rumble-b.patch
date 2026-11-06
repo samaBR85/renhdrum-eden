@@ -1,4 +1,4 @@
-From 7c43747ed4bf36556473a9d8bb5ce876517addfa Mon Sep 17 00:00:00 2001
+From 6e629ca5a18f7ac8defa9ddb8e1127e506c44486 Mon Sep 17 00:00:00 2001
 From: samaBR85 <sama85@gmail.com>
 Date: Thu, 5 Nov 2026 22:53:22 -0300
 Subject: [PATCH 3/4] input: per-game HD Rumble intensity and weak rumble boost
@@ -17,10 +17,10 @@ boost 60 % comes close to the console.
 Feito com Claude Code
 ---
  src/common/settings.h                         |  6 +++
- src/input_common/drivers/sdl_driver.cpp       | 31 +++++++++++--
- .../configuration/configure_hd_rumble.cpp     | 43 +++++++++++++++++++
+ src/input_common/drivers/sdl_driver.cpp       | 31 +++++++++--
+ .../configuration/configure_hd_rumble.cpp     | 51 +++++++++++++++++++
  src/yuzu/configuration/configure_hd_rumble.h  |  4 ++
- 4 files changed, 80 insertions(+), 4 deletions(-)
+ 4 files changed, 88 insertions(+), 4 deletions(-)
 
 diff --git a/src/common/settings.h b/src/common/settings.h
 index 4c5c5ab67d..374a8f986f 100644
@@ -109,10 +109,22 @@ index 4697fc43d8..970093fc5e 100644
      void RefreshRenHDrumUserSettings() {
          const RenHDrumUserSettings now = ReadRenHDrumUserSettings();
 diff --git a/src/yuzu/configuration/configure_hd_rumble.cpp b/src/yuzu/configuration/configure_hd_rumble.cpp
-index ad27d0c2ba..89657390d3 100644
+index ad27d0c2ba..ae956e45fa 100644
 --- a/src/yuzu/configuration/configure_hd_rumble.cpp
 +++ b/src/yuzu/configuration/configure_hd_rumble.cpp
-@@ -45,6 +45,43 @@ ConfigureHdRumble::ConfigureHdRumble(QWidget* parent) : QDialog(parent) {
+@@ -21,6 +21,11 @@
+ #include "yuzu/configuration/configure_hd_rumble.h"
+ 
+ namespace {
++// Room for "1000%" plus the arrows, whatever the font and scaling
++void FitPercentSpinBox(QSpinBox* box) {
++    box->setMinimumWidth(box->fontMetrics().horizontalAdvance(QStringLiteral("10000%")) + 40);
++}
++
+ QLabel* MakeNote(const QString& text) {
+     auto* label = new QLabel(text);
+     label->setWordWrap(true);
+@@ -45,6 +50,45 @@ ConfigureHdRumble::ConfigureHdRumble(QWidget* parent) : QDialog(parent) {
      header->addWidget(hd_enabled);
      root->addLayout(header);
  
@@ -124,6 +136,7 @@ index ad27d0c2ba..89657390d3 100644
 +    gain->setRange(25, 1000);
 +    gain->setSingleStep(25);
 +    gain->setSuffix(QStringLiteral("%"));
++    FitPercentSpinBox(gain);
 +    connect(gain_slider, &QSlider::valueChanged, gain, &QSpinBox::setValue);
 +    connect(gain, qOverload<int>(&QSpinBox::valueChanged), gain_slider, &QSlider::setValue);
 +    gain_row->addWidget(new QLabel(tr("Intensity")));
@@ -138,6 +151,7 @@ index ad27d0c2ba..89657390d3 100644
 +    boost->setRange(0, 100);
 +    boost->setSingleStep(5);
 +    boost->setSuffix(QStringLiteral("%"));
++    FitPercentSpinBox(boost);
 +    boost->setToolTip(tr("Lifts weak vibrations more than strong ones. 0% keeps the game's "
 +                         "curve."));
 +    connect(boost_slider, &QSlider::valueChanged, boost, &QSpinBox::setValue);
@@ -156,7 +170,15 @@ index ad27d0c2ba..89657390d3 100644
      // Body: controller list on the left, its settings on the right
      auto* body = new QHBoxLayout;
      page_list = new QListWidget;
-@@ -167,6 +204,8 @@ QWidget* ConfigureHdRumble::CreateDualSensePage() {
+@@ -147,6 +191,7 @@ QWidget* ConfigureHdRumble::CreateDualSensePage() {
+     ds_volume = new QSpinBox;
+     ds_volume->setRange(0, 100);
+     ds_volume->setSuffix(QStringLiteral("%"));
++    FitPercentSpinBox(ds_volume);
+     connect(ds_volume_slider, &QSlider::valueChanged, ds_volume, &QSpinBox::setValue);
+     connect(ds_volume, qOverload<int>(&QSpinBox::valueChanged), ds_volume_slider,
+             &QSlider::setValue);
+@@ -167,6 +212,8 @@ QWidget* ConfigureHdRumble::CreateDualSensePage() {
  void ConfigureHdRumble::LoadConfiguration() {
      const auto& s = Settings::values;
      hd_enabled->setChecked(s.hd_rumble_enabled.GetValue());
@@ -165,7 +187,7 @@ index ad27d0c2ba..89657390d3 100644
      usb_interval->setValue(std::clamp(s.hd_rumble_usb_interval_ms.GetValue(), 5, 100));
      envelope_5ms->setChecked(s.hd_rumble_envelope_5ms.GetValue());
      frequency_in_packet->setChecked(s.hd_rumble_frequency_in_packet.GetValue());
-@@ -183,6 +222,8 @@ void ConfigureHdRumble::LoadConfiguration() {
+@@ -183,6 +230,8 @@ void ConfigureHdRumble::LoadConfiguration() {
  
  void ConfigureHdRumble::RestoreDefaults() {
      hd_enabled->setChecked(true);
@@ -174,7 +196,7 @@ index ad27d0c2ba..89657390d3 100644
      usb_interval->setValue(15);
      envelope_5ms->setChecked(true);
      frequency_in_packet->setChecked(true);
-@@ -213,6 +254,8 @@ void ConfigureHdRumble::ApplyConfiguration() {
+@@ -213,6 +262,8 @@ void ConfigureHdRumble::ApplyConfiguration() {
      auto& s = Settings::values;
      const bool on = hd_enabled->isChecked();
      s.hd_rumble_enabled.SetValue(on);
