@@ -1,0 +1,56 @@
+name: Check patches
+
+# Applies the patch series to the current tip of each supported tree, so a
+# change upstream that breaks it shows up here instead of on someone's build.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Frizti/Lichii frizti-v1
+            repo: https://github.com/Frizti/Lichii.git
+            ref: refs/tags/frizti-v1
+          - name: Frizti/Lichii nx2
+            repo: https://github.com/Frizti/Lichii.git
+            ref: refs/heads/nx2
+          - name: zortos293/Lichii nx2
+            repo: https://github.com/zortos293/Lichii.git
+            ref: refs/heads/nx2
+          - name: Djihads80/Eglantine nx2
+            repo: https://github.com/Djihads80/Eglantine.git
+            ref: refs/heads/nx2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch ${{ matrix.name }}
+        run: |
+          git init -q emu
+          cd emu
+          git fetch -q --depth 1 "${{ matrix.repo }}" "${{ matrix.ref }}"
+          git checkout -q FETCH_HEAD
+          git log -1 --format='%H %cs %s'
+
+      - name: Apply the series
+        run: |
+          cd emu
+          git config user.name ci
+          git config user.email ci@example.invalid
+          for p in ../patches/*.patch; do
+            echo "::group::$(basename "$p")"
+            git am "$p"
+            echo "::endgroup::"
+          done

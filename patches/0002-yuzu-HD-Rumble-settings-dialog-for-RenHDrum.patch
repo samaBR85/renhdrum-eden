@@ -1,0 +1,567 @@
+From 75e492a03adef89ab971c6a41fac520352960d4e Mon Sep 17 00:00:00 2001
+From: samaBR85 <sama85@gmail.com>
+Date: Thu, 5 Nov 2026 21:14:29 -0300
+Subject: [PATCH 2/4] yuzu: HD Rumble settings dialog for RenHDrum
+
+Settings for the Switch controller HD Rumble (wired and Bluetooth) and the
+DualSense haptics, opened from the Vibration dialog. The SDL driver reads
+them on every vibration and re-applies on change.
+
+Feito com Claude Code
+---
+ src/common/settings.h                         |  23 ++
+ src/input_common/drivers/sdl_driver.cpp       | 105 +++++++-
+ src/yuzu/CMakeLists.txt                       |   2 +
+ .../configuration/configure_hd_rumble.cpp     | 228 ++++++++++++++++++
+ src/yuzu/configuration/configure_hd_rumble.h  |  55 +++++
+ .../configuration/configure_vibration.cpp     |  14 ++
+ 6 files changed, 415 insertions(+), 12 deletions(-)
+ create mode 100644 src/yuzu/configuration/configure_hd_rumble.cpp
+ create mode 100644 src/yuzu/configuration/configure_hd_rumble.h
+
+diff --git a/src/common/settings.h b/src/common/settings.h
+index e5f5029dc9..4c5c5ab67d 100644
+--- a/src/common/settings.h
++++ b/src/common/settings.h
+@@ -817,6 +817,29 @@ struct Values {
+     SwitchableSetting<bool> enable_accurate_vibrations{linkage, false, "enable_accurate_vibrations",
+                                                        Category::Controls};
+ 
++    // RenHDrum HD Rumble (Switch Pro Controller / Joy-Con) and DualSense haptics. Defaults are
++    // Ryuhdr 0.2.6's recommended mode. Read by the SDL driver on every vibration, so a change in
++    // the HD Rumble dialog applies to connected controllers right away.
++    Setting<bool> hd_rumble_enabled{linkage, true, "hd_rumble_enabled", Category::Controls};
++    Setting<int> hd_rumble_usb_interval_ms{linkage, 15, "hd_rumble_usb_interval_ms", Category::Controls};
++    Setting<bool> hd_rumble_envelope_5ms{linkage, true, "hd_rumble_envelope_5ms",
++                                         Category::Controls};
++    Setting<bool> hd_rumble_frequency_in_packet{linkage, true, "hd_rumble_frequency_in_packet",
++                                                Category::Controls};
++    Setting<bool> hd_rumble_crisp_notes{linkage, true, "hd_rumble_crisp_notes",
++                                        Category::Controls};
++    Setting<int> hd_rumble_bluetooth_level{linkage, 3, "hd_rumble_bluetooth_level", Category::Controls};
++    Setting<bool> hd_rumble_bt_after_input{linkage, true, "hd_rumble_bt_after_input",
++                                           Category::Controls};
++    Setting<bool> hd_rumble_bt_fast{linkage, true, "hd_rumble_bt_fast", Category::Controls};
++    Setting<bool> hd_rumble_bt_crisp_notes{linkage, true, "hd_rumble_bt_crisp_notes",
++                                           Category::Controls};
++    Setting<bool> dualsense_haptics_enabled{linkage, true, "dualsense_haptics_enabled",
++                                            Category::Controls};
++    Setting<int> dualsense_haptics_volume{linkage, 100, "dualsense_haptics_volume", Category::Controls};
++    Setting<bool> dualsense_crisp_notes{linkage, true, "dualsense_crisp_notes",
++                                        Category::Controls};
++
+     SwitchableSetting<bool> motion_enabled{linkage, true, "motion_enabled", Category::Controls};
+     Setting<std::string> udp_input_servers{linkage, "127.0.0.1:26760", "udp_input_servers",
+                                            Category::Controls};
+diff --git a/src/input_common/drivers/sdl_driver.cpp b/src/input_common/drivers/sdl_driver.cpp
+index 3cdee5cba8..4697fc43d8 100644
+--- a/src/input_common/drivers/sdl_driver.cpp
++++ b/src/input_common/drivers/sdl_driver.cpp
+@@ -457,8 +457,9 @@ public:
+     bool RenHDrumVibrate(int64_t now_us, bool is_right, const Common::Input::VibrationStatus& v) {
+         {
+             std::scoped_lock lock{renhdrum_mutex};
++            RefreshRenHDrumUserSettings();
+             if (!renhdrum_engine) {
+-                if (!dualsense_dsp) {
++                if (!dualsense_dsp || !applied_user.hd_enabled || !applied_user.dualsense_enabled) {
+                     return false;
+                 }
+                 renhdrum_dualsense_dsp_set_half_target(dualsense_dsp, is_right, v.low_amplitude,
+@@ -466,6 +467,9 @@ public:
+                                                        v.high_frequency);
+                 return ds_audio_stream != nullptr;
+             }
++            if (!applied_user.hd_enabled) {
++                return false;
++            }
+             renhdrum_engine_push_half_sample(renhdrum_engine, now_us, is_right, v.low_amplitude,
+                                              v.low_frequency, v.high_amplitude, v.high_frequency);
+         }
+@@ -498,6 +502,8 @@ private:
+                 const bool is_bluetooth =
+                     (SDL_GetJoystickConnectionState(sdl_joystick.get()) == SDL_JOYSTICK_CONNECTION_WIRELESS);
+                 const bool is_pro = (pid == 0x2009);
++                renhdrum_is_bluetooth = is_bluetooth;
++                applied_user = ReadRenHDrumUserSettings();
+                 renhdrum_engine = renhdrum_engine_create(is_bluetooth, is_pro);
+                 if (renhdrum_engine) {
+                     LOG_INFO(Input, "Initialized RenHDrum engine for Switch controller {:04X}:{:04X} (BT: {})",
+@@ -508,7 +514,9 @@ private:
+         }
+         // Sony DualSense (VID 0x054C, PID 0x0CE6 or 0x0DF2)
+         else if (vid == 0x054C && (pid == 0x0CE6 || pid == 0x0DF2)) {
+-            dualsense_dsp = renhdrum_dualsense_dsp_create(100, true);
++            applied_user = ReadRenHDrumUserSettings();
++            dualsense_dsp = renhdrum_dualsense_dsp_create(applied_user.dualsense_volume,
++                                                          applied_user.dualsense_crisp_notes);
+             if (dualsense_dsp) {
+                 LOG_INFO(Input, "Initialized RenHDrum DualSense DSP for controller {:04X}:{:04X}", vid, pid);
+                 TryOpenDualSenseAudio();
+@@ -520,19 +528,20 @@ private:
+     // B1 / B3 / B2. Flag files next to eden.exe still win (renhdrum_settings_resolve). Then the SDL modes are switched on; a mode
+     // SDL refused is cleared, so the engine never paces for writes that SDL does not gate (Ryuhdr: _noQueueActive / _btFastActive).
+     void ApplyRenHDrumSettings(bool is_bluetooth) {
++        const RenHDrumUserSettings& u = applied_user;
+         RenHdcConfig config{};
+-        config.enable_hd_rumble = true;
+-        config.hd_rumble_usb_interval_ms = 15;
+-        config.hd_rumble_bluetooth_level = 3;
++        config.enable_hd_rumble = u.hd_enabled;
++        config.hd_rumble_usb_interval_ms = u.usb_interval_ms;
++        config.hd_rumble_bluetooth_level = u.bluetooth_level;
+         config.hd_rumble_usb_auto_slow = true;
+         config.hd_rumble_experimental_usb_no_queue = true;
+-        config.hd_rumble_experimental_envelope_5ms = true;
+-        config.hd_rumble_experimental_frequency_in_packet = true;
+-        config.hd_rumble_experimental_frequency_both_bands = true;
+-        config.hd_rumble_experimental_crisp_notes = true;
+-        config.hd_rumble_experimental_bt_after_input = true;
+-        config.hd_rumble_experimental_bt_fast = true;
+-        config.hd_rumble_experimental_bt_crisp_notes = true;
++        config.hd_rumble_experimental_envelope_5ms = u.envelope_5ms;
++        config.hd_rumble_experimental_frequency_in_packet = u.frequency_in_packet;
++        config.hd_rumble_experimental_frequency_both_bands = u.frequency_in_packet;
++        config.hd_rumble_experimental_crisp_notes = u.crisp_notes;
++        config.hd_rumble_experimental_bt_after_input = u.bt_after_input;
++        config.hd_rumble_experimental_bt_fast = u.bt_fast;
++        config.hd_rumble_experimental_bt_crisp_notes = u.bt_crisp_notes;
+ 
+         RenHdcSettings settings{};
+         if (renhdrum_settings_resolve(&config, &settings) != RENHDRUM_OK) {
+@@ -540,6 +549,9 @@ private:
+         }
+ 
+         SDL_Joystick* joystick = sdl_joystick.get();
++        SDL_HDRumbleSetNoQueue(joystick, 0, 0, 0);
++        SDL_HDRumbleSetNoQueueBluetooth(joystick, 0, 0);
++        SDL_HDRumbleSetBluetoothAfterInput(joystick, 0);
+         if (is_bluetooth) {
+             // Card B3 needs B1 on (Ryuhdr HdApplyBtFast); SDL never runs both on one pad, B3 wins
+             settings.bt_fast = settings.enabled && settings.bt_fast && settings.bt_after_input &&
+@@ -570,6 +582,73 @@ private:
+         renhdrum_engine_apply_settings(renhdrum_engine, &settings);
+     }
+ 
++    struct RenHDrumUserSettings {
++        bool hd_enabled{true};
++        int usb_interval_ms{15};
++        bool envelope_5ms{true};
++        bool frequency_in_packet{true};
++        bool crisp_notes{true};
++        int bluetooth_level{3};
++        bool bt_after_input{true};
++        bool bt_fast{true};
++        bool bt_crisp_notes{true};
++        bool dualsense_enabled{true};
++        int dualsense_volume{100};
++        bool dualsense_crisp_notes{true};
++        bool operator==(const RenHDrumUserSettings&) const = default;
++    };
++
++    static RenHDrumUserSettings ReadRenHDrumUserSettings() {
++        const auto& s = Settings::values;
++        return {
++            .hd_enabled = s.hd_rumble_enabled.GetValue(),
++            .usb_interval_ms = std::clamp(s.hd_rumble_usb_interval_ms.GetValue(), 5, 100),
++            .envelope_5ms = s.hd_rumble_envelope_5ms.GetValue(),
++            .frequency_in_packet = s.hd_rumble_frequency_in_packet.GetValue(),
++            .crisp_notes = s.hd_rumble_crisp_notes.GetValue(),
++            .bluetooth_level = std::clamp(s.hd_rumble_bluetooth_level.GetValue(), 1, 3),
++            .bt_after_input = s.hd_rumble_bt_after_input.GetValue(),
++            .bt_fast = s.hd_rumble_bt_fast.GetValue(),
++            .bt_crisp_notes = s.hd_rumble_bt_crisp_notes.GetValue(),
++            .dualsense_enabled = s.dualsense_haptics_enabled.GetValue(),
++            .dualsense_volume = std::clamp(s.dualsense_haptics_volume.GetValue(), 0, 100),
++            .dualsense_crisp_notes = s.dualsense_crisp_notes.GetValue(),
++        };
++    }
++
++    // Caller holds renhdrum_mutex. Picks up changes made in the HD Rumble dialog.
++    void RefreshRenHDrumUserSettings() {
++        const RenHDrumUserSettings now = ReadRenHDrumUserSettings();
++        if (now == applied_user) {
++            return;
++        }
++        const RenHDrumUserSettings old = applied_user;
++        applied_user = now;
++        if (renhdrum_engine && sdl_joystick) {
++            if (old.hd_enabled && !now.hd_enabled) {
++                uint8_t stop_pkt[10] = {0x10, 0, 0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40};
++                SDL_SendJoystickEffect(sdl_joystick.get(), stop_pkt, sizeof(stop_pkt));
++            }
++            ApplyRenHDrumSettings(renhdrum_is_bluetooth);
++            LOG_INFO(Input, "RenHDrum: HD Rumble settings changed, applied");
++        }
++        if (dualsense_dsp && (old.dualsense_volume != now.dualsense_volume ||
++                              old.dualsense_crisp_notes != now.dualsense_crisp_notes)) {
++            // The audio callback runs with the stream locked, so it never sees a freed DSP.
++            if (ds_audio_stream) {
++                SDL_LockAudioStream(ds_audio_stream);
++            }
++            renhdrum_dualsense_dsp_destroy(dualsense_dsp);
++            dualsense_dsp =
++                renhdrum_dualsense_dsp_create(now.dualsense_volume, now.dualsense_crisp_notes);
++            if (ds_audio_stream) {
++                SDL_UnlockAudioStream(ds_audio_stream);
++            }
++            LOG_INFO(Input, "RenHDrum: DualSense haptics volume {}%, crisp notes {}",
++                     now.dualsense_volume, now.dualsense_crisp_notes);
++        }
++    }
++
+     void TryOpenDualSenseAudio() {
+         if (!dualsense_dsp || !sdl_joystick || ds_audio_stream) {
+             return;
+@@ -716,6 +795,8 @@ private:
+     int ds_audio_attempts{0};
+     int64_t ds_audio_next_us{0};
+     bool ds_audio_inited{false};
++    bool renhdrum_is_bluetooth{false};
++    RenHDrumUserSettings applied_user{};
+ 
+     u64 last_motion_update{};
+     static constexpr std::size_t InitialMotionRestartThreshold = 200;
+diff --git a/src/yuzu/CMakeLists.txt b/src/yuzu/CMakeLists.txt
+index 71b47545ff..78aae2aae5 100644
+--- a/src/yuzu/CMakeLists.txt
++++ b/src/yuzu/CMakeLists.txt
+@@ -140,6 +140,8 @@ add_executable(yuzu
+     configuration/configure_ui.cpp
+     configuration/configure_ui.h
+     configuration/configure_ui.ui
++    configuration/configure_hd_rumble.cpp
++    configuration/configure_hd_rumble.h
+     configuration/configure_vibration.cpp
+     configuration/configure_vibration.h
+     configuration/configure_vibration.ui
+diff --git a/src/yuzu/configuration/configure_hd_rumble.cpp b/src/yuzu/configuration/configure_hd_rumble.cpp
+new file mode 100644
+index 0000000000..ad27d0c2ba
+--- /dev/null
++++ b/src/yuzu/configuration/configure_hd_rumble.cpp
+@@ -0,0 +1,228 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include <algorithm>
++
++#include <QCheckBox>
++#include <QComboBox>
++#include <QDialogButtonBox>
++#include <QFormLayout>
++#include <QGroupBox>
++#include <QHBoxLayout>
++#include <QLabel>
++#include <QListWidget>
++#include <QPushButton>
++#include <QSlider>
++#include <QSpinBox>
++#include <QStackedWidget>
++#include <QVBoxLayout>
++
++#include "common/settings.h"
++#include "yuzu/configuration/configure_hd_rumble.h"
++
++namespace {
++QLabel* MakeNote(const QString& text) {
++    auto* label = new QLabel(text);
++    label->setWordWrap(true);
++    label->setStyleSheet(QStringLiteral("color: palette(mid);"));
++    return label;
++}
++} // namespace
++
++ConfigureHdRumble::ConfigureHdRumble(QWidget* parent) : QDialog(parent) {
++    setWindowTitle(tr("HD Rumble"));
++    setMinimumSize(640, 460);
++
++    auto* root = new QVBoxLayout(this);
++
++    // Header: master switch
++    auto* header = new QHBoxLayout;
++    auto* title = new QLabel(tr("<b>HD Rumble</b>"));
++    hd_enabled = new QCheckBox(tr("Enabled"));
++    hd_enabled->setToolTip(tr("Off: the controllers use the emulator's standard rumble."));
++    header->addWidget(title);
++    header->addStretch();
++    header->addWidget(hd_enabled);
++    root->addLayout(header);
++
++    // Body: controller list on the left, its settings on the right
++    auto* body = new QHBoxLayout;
++    page_list = new QListWidget;
++    page_list->addItem(tr("Switch Controller"));
++    page_list->addItem(tr("DualSense"));
++    page_list->setFixedWidth(170);
++    pages = new QStackedWidget;
++    pages->addWidget(CreateSwitchPage());
++    pages->addWidget(CreateDualSensePage());
++    connect(page_list, &QListWidget::currentRowChanged, pages, &QStackedWidget::setCurrentIndex);
++    page_list->setCurrentRow(0);
++    body->addWidget(page_list);
++    body->addWidget(pages, 1);
++    root->addLayout(body, 1);
++
++    root->addWidget(MakeNote(
++        tr("Changes reach connected controllers on their next vibration. To feel them now, open "
++           "the Vibration settings and hold a button on the controller.")));
++
++    auto* footer = new QHBoxLayout;
++    auto* credit = new QLabel(tr("Powered by RenHDrum"));
++    credit->setStyleSheet(QStringLiteral("color: palette(mid);"));
++    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel |
++                                         QDialogButtonBox::RestoreDefaults);
++    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
++    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
++    connect(buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this,
++            &ConfigureHdRumble::RestoreDefaults);
++    footer->addWidget(credit);
++    footer->addStretch();
++    footer->addWidget(buttons);
++    root->addLayout(footer);
++
++    connect(hd_enabled, &QCheckBox::toggled, this, &ConfigureHdRumble::UpdateEnabledState);
++    connect(ds_enabled, &QCheckBox::toggled, this, &ConfigureHdRumble::UpdateEnabledState);
++    connect(envelope_5ms, &QCheckBox::toggled, this, &ConfigureHdRumble::UpdateEnabledState);
++
++    LoadConfiguration();
++}
++
++ConfigureHdRumble::~ConfigureHdRumble() = default;
++
++QWidget* ConfigureHdRumble::CreateSwitchPage() {
++    auto* page = new QWidget;
++    auto* layout = new QVBoxLayout(page);
++    layout->setContentsMargins(0, 0, 0, 0);
++    layout->addWidget(MakeNote(tr("Pro Controller and Joy-Con: the game's HD Rumble sent with "
++                                  "full detail instead of a plain motor rumble.")));
++
++    wired_group = new QGroupBox(tr("Wired (USB)"));
++    auto* wired = new QFormLayout(wired_group);
++    usb_interval = new QSpinBox;
++    usb_interval->setRange(5, 100);
++    usb_interval->setSuffix(tr(" ms"));
++    usb_interval->setToolTip(tr("Time between rumble packets. 15 ms is the console's rate."));
++    envelope_5ms = new QCheckBox(tr("5 ms envelope (three samples per packet)"));
++    frequency_in_packet = new QCheckBox(tr("Frequency changes inside a packet"));
++    crisp_notes = new QCheckBox(tr("Crisp notes (stronger attack, softer sustain)"));
++    wired->addRow(tr("Packet interval"), usb_interval);
++    wired->addRow(envelope_5ms);
++    wired->addRow(frequency_in_packet);
++    wired->addRow(crisp_notes);
++    layout->addWidget(wired_group);
++
++    bt_group = new QGroupBox(tr("Bluetooth"));
++    auto* bt = new QFormLayout(bt_group);
++    bt_level = new QComboBox;
++    bt_level->addItem(tr("1 - Stable (60 ms)"), 1);
++    bt_level->addItem(tr("2 - Balanced (45 ms)"), 2);
++    bt_level->addItem(tr("3 - Quality (35 ms)"), 3);
++    bt_level->setToolTip(tr("Lower levels send less often, which keeps input lag down on a busy "
++                            "Bluetooth link."));
++    bt_after_input = new QCheckBox(tr("Send right after an input report"));
++    bt_fast = new QCheckBox(tr("5 ms envelope while the link is idle"));
++    bt_crisp_notes = new QCheckBox(tr("Crisp notes"));
++    bt->addRow(tr("Level"), bt_level);
++    bt->addRow(bt_after_input);
++    bt->addRow(bt_fast);
++    bt->addRow(bt_crisp_notes);
++    layout->addWidget(bt_group);
++
++    layout->addStretch();
++    return page;
++}
++
++QWidget* ConfigureHdRumble::CreateDualSensePage() {
++    auto* page = new QWidget;
++    auto* layout = new QVBoxLayout(page);
++    layout->setContentsMargins(0, 0, 0, 0);
++    layout->addWidget(MakeNote(tr("Rumble through the haptic voice coils of the PS5 controller "
++                                  "(DualSense and DualSense Edge), as 48,000 samples per second "
++                                  "of audio.")));
++
++    auto* group = new QGroupBox(tr("Wired (USB)"));
++    auto* form = new QFormLayout(group);
++    ds_enabled = new QCheckBox(tr("Use the haptic voice coils"));
++    ds_enabled->setToolTip(tr("Off: the DualSense uses its standard rumble."));
++    ds_volume_slider = new QSlider(Qt::Horizontal);
++    ds_volume_slider->setRange(0, 100);
++    ds_volume = new QSpinBox;
++    ds_volume->setRange(0, 100);
++    ds_volume->setSuffix(QStringLiteral("%"));
++    connect(ds_volume_slider, &QSlider::valueChanged, ds_volume, &QSpinBox::setValue);
++    connect(ds_volume, qOverload<int>(&QSpinBox::valueChanged), ds_volume_slider,
++            &QSlider::setValue);
++    auto* volume_row = new QHBoxLayout;
++    volume_row->addWidget(ds_volume_slider, 1);
++    volume_row->addWidget(ds_volume);
++    ds_crisp_notes = new QCheckBox(tr("Crisp notes"));
++    form->addRow(ds_enabled);
++    form->addRow(tr("Volume"), volume_row);
++    form->addRow(ds_crisp_notes);
++    layout->addWidget(group);
++
++    layout->addWidget(MakeNote(tr("On Bluetooth the DualSense uses its standard rumble.")));
++    layout->addStretch();
++    return page;
++}
++
++void ConfigureHdRumble::LoadConfiguration() {
++    const auto& s = Settings::values;
++    hd_enabled->setChecked(s.hd_rumble_enabled.GetValue());
++    usb_interval->setValue(std::clamp(s.hd_rumble_usb_interval_ms.GetValue(), 5, 100));
++    envelope_5ms->setChecked(s.hd_rumble_envelope_5ms.GetValue());
++    frequency_in_packet->setChecked(s.hd_rumble_frequency_in_packet.GetValue());
++    crisp_notes->setChecked(s.hd_rumble_crisp_notes.GetValue());
++    bt_level->setCurrentIndex(std::clamp(s.hd_rumble_bluetooth_level.GetValue(), 1, 3) - 1);
++    bt_after_input->setChecked(s.hd_rumble_bt_after_input.GetValue());
++    bt_fast->setChecked(s.hd_rumble_bt_fast.GetValue());
++    bt_crisp_notes->setChecked(s.hd_rumble_bt_crisp_notes.GetValue());
++    ds_enabled->setChecked(s.dualsense_haptics_enabled.GetValue());
++    ds_volume->setValue(std::clamp(s.dualsense_haptics_volume.GetValue(), 0, 100));
++    ds_crisp_notes->setChecked(s.dualsense_crisp_notes.GetValue());
++    UpdateEnabledState();
++}
++
++void ConfigureHdRumble::RestoreDefaults() {
++    hd_enabled->setChecked(true);
++    usb_interval->setValue(15);
++    envelope_5ms->setChecked(true);
++    frequency_in_packet->setChecked(true);
++    crisp_notes->setChecked(true);
++    bt_level->setCurrentIndex(2);
++    bt_after_input->setChecked(true);
++    bt_fast->setChecked(true);
++    bt_crisp_notes->setChecked(true);
++    ds_enabled->setChecked(true);
++    ds_volume->setValue(100);
++    ds_crisp_notes->setChecked(true);
++    UpdateEnabledState();
++}
++
++void ConfigureHdRumble::UpdateEnabledState() {
++    const bool on = hd_enabled->isChecked();
++    pages->setEnabled(on);
++    page_list->setEnabled(on);
++    // The extra wired cards only run on top of the 5 ms envelope
++    frequency_in_packet->setEnabled(envelope_5ms->isChecked());
++    crisp_notes->setEnabled(envelope_5ms->isChecked());
++    ds_volume_slider->setEnabled(ds_enabled->isChecked());
++    ds_volume->setEnabled(ds_enabled->isChecked());
++    ds_crisp_notes->setEnabled(ds_enabled->isChecked());
++}
++
++void ConfigureHdRumble::ApplyConfiguration() {
++    auto& s = Settings::values;
++    const bool on = hd_enabled->isChecked();
++    s.hd_rumble_enabled.SetValue(on);
++    s.hd_rumble_usb_interval_ms.SetValue(usb_interval->value());
++    s.hd_rumble_envelope_5ms.SetValue(envelope_5ms->isChecked());
++    s.hd_rumble_frequency_in_packet.SetValue(frequency_in_packet->isChecked());
++    s.hd_rumble_crisp_notes.SetValue(crisp_notes->isChecked());
++    s.hd_rumble_bluetooth_level.SetValue(bt_level->currentData().toInt());
++    s.hd_rumble_bt_after_input.SetValue(bt_after_input->isChecked());
++    s.hd_rumble_bt_fast.SetValue(bt_fast->isChecked());
++    s.hd_rumble_bt_crisp_notes.SetValue(bt_crisp_notes->isChecked());
++    // The master switch also turns the DualSense haptics off (the SDL driver checks both)
++    s.dualsense_haptics_enabled.SetValue(ds_enabled->isChecked());
++    s.dualsense_haptics_volume.SetValue(ds_volume->value());
++    s.dualsense_crisp_notes.SetValue(ds_crisp_notes->isChecked());
++}
+diff --git a/src/yuzu/configuration/configure_hd_rumble.h b/src/yuzu/configuration/configure_hd_rumble.h
+new file mode 100644
+index 0000000000..a2a6adfdcf
+--- /dev/null
++++ b/src/yuzu/configuration/configure_hd_rumble.h
+@@ -0,0 +1,55 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <QDialog>
++
++class QCheckBox;
++class QComboBox;
++class QGroupBox;
++class QListWidget;
++class QSlider;
++class QSpinBox;
++class QStackedWidget;
++
++/// Settings for RenHDrum: HD Rumble on Switch Pro Controller / Joy-Con and the DualSense voice
++/// coil haptics. The SDL driver reads them on every vibration, so connected controllers pick up
++/// a change as soon as the dialog is accepted.
++class ConfigureHdRumble : public QDialog {
++    Q_OBJECT
++
++public:
++    explicit ConfigureHdRumble(QWidget* parent);
++    ~ConfigureHdRumble() override;
++
++    void ApplyConfiguration();
++
++private:
++    QWidget* CreateSwitchPage();
++    QWidget* CreateDualSensePage();
++    void LoadConfiguration();
++    void RestoreDefaults();
++    void UpdateEnabledState();
++
++    QCheckBox* hd_enabled{};
++    QListWidget* page_list{};
++    QStackedWidget* pages{};
++
++    QGroupBox* wired_group{};
++    QSpinBox* usb_interval{};
++    QCheckBox* envelope_5ms{};
++    QCheckBox* frequency_in_packet{};
++    QCheckBox* crisp_notes{};
++
++    QGroupBox* bt_group{};
++    QComboBox* bt_level{};
++    QCheckBox* bt_after_input{};
++    QCheckBox* bt_fast{};
++    QCheckBox* bt_crisp_notes{};
++
++    QCheckBox* ds_enabled{};
++    QSlider* ds_volume_slider{};
++    QSpinBox* ds_volume{};
++    QCheckBox* ds_crisp_notes{};
++};
+diff --git a/src/yuzu/configuration/configure_vibration.cpp b/src/yuzu/configuration/configure_vibration.cpp
+index 6b1f4527b8..9b54c3f684 100644
+--- a/src/yuzu/configuration/configure_vibration.cpp
++++ b/src/yuzu/configuration/configure_vibration.cpp
+@@ -7,6 +7,9 @@
+ #include "hid_core/hid_types.h"
+ #include "ui_configure_vibration.h"
+ #include "yuzu/configuration/configure_vibration.h"
++#include "yuzu/configuration/configure_hd_rumble.h"
++
++#include <QPushButton>
+ 
+ ConfigureVibration::ConfigureVibration(QWidget* parent, Core::HID::HIDCore& hid_core_)
+     : QDialog(parent), ui(std::make_unique<Ui::ConfigureVibration>()), hid_core{hid_core_} {
+@@ -45,6 +48,17 @@ ConfigureVibration::ConfigureVibration(QWidget* parent, Core::HID::HIDCore& hid_
+         ui->checkBoxAccurateVibration->setDisabled(true);
+     }
+ 
++    auto* hd_rumble_button = new QPushButton(tr("HD Rumble..."));
++    hd_rumble_button->setToolTip(
++        tr("HD Rumble for Pro Controller / Joy-Con and DualSense haptics (RenHDrum)."));
++    connect(hd_rumble_button, &QPushButton::clicked, this, [this] {
++        ConfigureHdRumble dialog(this);
++        if (dialog.exec() == QDialog::Accepted) {
++            dialog.ApplyConfiguration();
++        }
++    });
++    ui->verticalLayout->addWidget(hd_rumble_button);
++
+     RetranslateUI();
+ }
+ 
+-- 
+2.53.0.windows.3
+
