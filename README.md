@@ -42,11 +42,12 @@ Weekly CI checks that the series still applies to these trees:
 | [Frizti/Lichii](https://github.com/Frizti/Lichii) | `frizti-v2` tag | ✅ | |
 | [Frizti/Lichii](https://github.com/Frizti/Lichii) | `nx2` | ✅ | ✅ Windows x64 (MSVC) |
 | [zortos293/Lichii](https://github.com/zortos293/Lichii) | `nx2` | ✅ | ✅ Windows x64 (MSVC), Linux (GCC 13, `-Werror`, tests) |
+| [K-code-AI/Lichii](https://github.com/K-code-AI/Lichii) | `build-4` release | ✅ | ✅ Windows x64 (MSVC), played |
 | [Djihads80/Eglantine](https://github.com/Djihads80/Eglantine) | `nx2` | ✅ | |
 
 [![Check patches](https://github.com/samaBR85/renhdrum-eden/actions/workflows/check-patches.yml/badge.svg)](https://github.com/samaBR85/renhdrum-eden/actions/workflows/check-patches.yml)
 
-It was played on Windows with a wired DualSense Edge, in Ocarina of Time and Donkey Kong Bananza, on Lichii `frizti-v1` and `frizti-v2`. Those play tests used an earlier layout of the same code (inline in the SDL driver). The current layout was then run on `zortos293/Lichii nx2`: the downloaded `renhdrum.dll` loaded, the DualSense was picked up, its haptics audio device opened, and the emulator closed cleanly. No Switch Pro Controller was available for testing.
+It was played on Windows with a wired DualSense Edge, in Ocarina of Time and Donkey Kong Bananza, on Lichii `frizti-v1` and `frizti-v2`. Those play tests used an earlier layout of the same code (inline in the SDL driver). The current layout was then run on `zortos293/Lichii nx2`: the downloaded `renhdrum.dll` loaded, the DualSense was picked up, its haptics audio device opened, and the emulator closed cleanly. The current layout is also played day to day on `K-code-AI/Lichii build-4` with RenHDrum v0.2.1. No Switch Pro Controller was available for testing.
 
 Upstream [Eden](https://git.eden-emu.dev/eden-emu/eden) and other forks share the same input code and should take the series with little or no change, but have not been tried. If you port it to another fork, a pull request adding it to this table is welcome.
 
@@ -65,14 +66,14 @@ To leave the trace out, apply only `0001`. If a patch does not apply, `git am --
 
 ## Building
 
-Use the emulator's normal build (its `docs/Build.md`). No Rust and no extra library are needed to compile: RenHDrum's C header comes with the patch (`externals/renhdrum/renhdrum.h`, v0.1.1).
+Use the emulator's normal build (its `docs/Build.md`). No Rust and no extra library are needed to compile: RenHDrum's C header comes with the patch (`externals/renhdrum/renhdrum.h`, v0.2.1).
 
 Three CMake options control it:
 
 | Option | Default | What it does |
 |---|---|---|
 | `ENABLE_RENHDRUM` | ON | Builds the RenHDrum support. Harmless without the library. |
-| `RENHDRUM_DOWNLOAD` | OFF | Windows: downloads the official [RenHDrum v0.1.1](https://github.com/trzz1214/RenHDrum/releases/tag/v0.1.1) `renhdrum.dll`, checks its SHA-256, and copies it next to the emulator executable. |
+| `RENHDRUM_DOWNLOAD` | OFF | Windows: downloads the official [RenHDrum v0.2.1](https://github.com/trzz1214/RenHDrum/releases/tag/v0.2.1) `renhdrum.dll`, checks its SHA-256, and copies it next to the emulator executable. |
 | `RENHDRUM_SDL_PATCHES` | OFF | Builds SDL3 3.4.8 from source with [RenHDrum's two SDL3 patches](https://github.com/trzz1214/RenHDrum/tree/main/integrations/sdl3/sdl3-patches) (a separate `sdl3-hdrumble` package). They add "no-queue" and "write after input" modes for Switch controllers. Without them RenHDrum paces queued writes by its own clock. They are opt-in because they also change SDL's default Switch rumble refresh. |
 
 For the full experience on Windows, add `-DRENHDRUM_DOWNLOAD=ON -DRENHDRUM_SDL_PATCHES=ON`. The configure line used for the tested build (Qt 6.8.3 `msvc2022_64`, Ninja, Visual Studio 2022 Build Tools environment loaded):
@@ -196,7 +197,7 @@ This fits the "equalization between hardware generations" that the RenHDrum auth
 |---|---|
 | [zortos293/Lichii#213](https://github.com/zortos293/Lichii/pull/213) | This change (patch `0001`), proposed to Lichii |
 | [Frizti/Lichii#4](https://github.com/Frizti/Lichii/pull/4) | The same change, proposed to Frizti's Lichii |
-| [trzz1214/RenHDrum#1](https://github.com/trzz1214/RenHDrum/pull/1) | A link to this series and the Ocarina of Time findings, proposed to RenHDrum |
+| [trzz1214/RenHDrum#1](https://github.com/trzz1214/RenHDrum/pull/1) | A link to this series and the Ocarina of Time findings: **merged** as [`integrations/eden-forks`](https://github.com/trzz1214/RenHDrum/tree/main/integrations/eden-forks) |
 
 ---
 

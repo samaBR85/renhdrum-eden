@@ -33,6 +33,9 @@ jobs:
           - name: zortos293/Lichii nx2
             repo: https://github.com/zortos293/Lichii.git
             ref: refs/heads/nx2
+          - name: K-code-AI/Lichii build-4
+            repo: https://github.com/K-code-AI/Lichii.git
+            ref: refs/tags/build-4
           - name: Djihads80/Eglantine nx2
             repo: https://github.com/Djihads80/Eglantine.git
             ref: refs/heads/nx2

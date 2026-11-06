@@ -1,6 +1,6 @@
-From 281d43f59e5d12d91e3d48e975a5135c7bbe6d91 Mon Sep 17 00:00:00 2001
+From 133e160b75c9a0ab6097e972292cd05c3a11b933 Mon Sep 17 00:00:00 2001
 From: samaBR85 <sama85@gmail.com>
-Date: Fri, 6 Nov 2026 03:37:54 -0300
+Date: Fri, 6 Nov 2026 03:47:58 -0300
 Subject: [PATCH 1/2] input: HD Rumble and DualSense haptics through RenHDrum
 
 Plays controller vibration through RenHDrum
@@ -20,10 +20,10 @@ controllers, nothing changes.
   The Legend of Zelda: Ocarina of Time peaks at 0.096 through command 214,
   Donkey Kong Bananza at 0.53.
 - ENABLE_RENHDRUM (ON) builds the support. RENHDRUM_DOWNLOAD (OFF) fetches
-  the v0.1.1 renhdrum.dll, SHA-256 checked, next to the executable on
+  the v0.2.1 renhdrum.dll, SHA-256 checked, next to the executable on
   Windows. RENHDRUM_SDL_PATCHES (OFF) builds SDL3 from source with
   RenHDrum's two HD Rumble transport patches (sdl3-hdrumble).
-- externals/renhdrum/renhdrum.h: the RenHDrum v0.1.1 C ABI header
+- externals/renhdrum/renhdrum.h: the RenHDrum v0.2.1 C ABI header
   (MIT OR Apache-2.0).
 
 Based on RenHDrum's Brontide reference patches by Three-Dola
@@ -37,7 +37,7 @@ Feito com Claude Code
  CMakeLists.txt                                |  12 +
  cpmfile.json                                  |  11 +
  externals/CMakeLists.txt                      |   7 +-
- externals/renhdrum/renhdrum.h                 | 278 ++++++++
+ externals/renhdrum/renhdrum.h                 | 294 ++++++++
  src/common/settings.h                         |  29 +
  src/hid_core/frontend/emulated_controller.cpp |   8 +
  src/input_common/CMakeLists.txt               |  10 +
@@ -49,7 +49,7 @@ Feito com Claude Code
  .../configuration/configure_hd_rumble.cpp     | 282 ++++++++
  src/yuzu/configuration/configure_hd_rumble.h  |  59 ++
  .../configuration/configure_vibration.cpp     |  16 +
- 18 files changed, 2056 insertions(+), 4 deletions(-)
+ 18 files changed, 2072 insertions(+), 4 deletions(-)
  create mode 100644 .patch/sdl3-hdrumble/0001-hdrumble.patch
  create mode 100644 .patch/sdl3-hdrumble/0002-hdrumble-idle-write.patch
  create mode 100644 externals/renhdrum/renhdrum.h
@@ -607,7 +607,7 @@ index 0000000000..f3d39118a5
 + 
 + extern float HIDAPI_RemapVal(float val, float val_min, float val_max, float output_min, float output_max);
 diff --git a/.reuse/dep5 b/.reuse/dep5
-index 801ea51698..f613cf8b89 100644
+index 801ea51698..89104089f2 100644
 --- a/.reuse/dep5
 +++ b/.reuse/dep5
 @@ -190,3 +190,13 @@ License: GPL-3.0-or-later
@@ -618,7 +618,7 @@ index 801ea51698..f613cf8b89 100644
 +Files: externals/renhdrum/renhdrum.h
 +Copyright: 2026 Three-Dola
 +License: MIT OR Apache-2.0
-+Comment: Public C ABI header of RenHDrum v0.1.1, https://github.com/trzz1214/RenHDrum
++Comment: Public C ABI header of RenHDrum v0.2.1, https://github.com/trzz1214/RenHDrum
 +
 +Files: .patch/sdl3-hdrumble/*
 +Copyright: 2026 Three-Dola
@@ -689,10 +689,10 @@ index cb1deceb96..8a06017378 100644
      AddJsonPackage(sdl3-ci)
 diff --git a/externals/renhdrum/renhdrum.h b/externals/renhdrum/renhdrum.h
 new file mode 100644
-index 0000000000..6f40dadf32
+index 0000000000..cd92ef16b6
 --- /dev/null
 +++ b/externals/renhdrum/renhdrum.h
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,294 @@
 +#ifndef RENHDRUM_H
 +#define RENHDRUM_H
 +
@@ -703,7 +703,7 @@ index 0000000000..6f40dadf32
 +extern "C" {
 +#endif
 +
-+#define RENHDRUM_VERSION 0x000101
++#define RENHDRUM_VERSION 0x000201
 +
 +#define RENHDRUM_OK 0
 +#define RENHDRUM_ERR_NULL_PTR -1
@@ -893,6 +893,7 @@ index 0000000000..6f40dadf32
 +/* Opaque pointer types for stateful engines */
 +typedef struct RenHdcEngine RenHdcEngine;
 +typedef struct RenHdcDualSenseDsp RenHdcDualSenseDsp;
++typedef struct RenHdcXboxRumble RenHdcXboxRumble;
 +
 +RenHdcEngine *renhdrum_engine_create(bool is_bluetooth, bool is_pro_controller);
 +void renhdrum_engine_destroy(RenHdcEngine *engine);
@@ -965,6 +966,21 @@ index 0000000000..6f40dadf32
 +    int64_t pulse_age_ms,
 +    uint8_t *out_ds5_effects47
 +);
++
++RenHdcXboxRumble *renhdrum_xbox_rumble_create(bool is_bluetooth);
++void renhdrum_xbox_rumble_destroy(RenHdcXboxRumble *rumble);
++int32_t renhdrum_xbox_rumble_push_half_sample(
++    RenHdcXboxRumble *rumble,
++    int64_t now_us,
++    bool is_right,
++    float low_amp,
++    float low_freq,
++    float high_amp,
++    float high_freq
++);
++/* out_motors4: left grip, right grip, left trigger, right trigger. Returns 1 when they must be sent now. */
++int32_t renhdrum_xbox_rumble_tick(RenHdcXboxRumble *rumble, int64_t now_us, uint16_t *out_motors4);
++int32_t renhdrum_xbox_rumble_resend(RenHdcXboxRumble *rumble);
 +
 +#ifdef __cplusplus
 +}
@@ -1937,7 +1953,7 @@ index e6751b6688..c04a823433 100644
      std::atomic<bool> initialized = false;
      bool start_thread;
 diff --git a/src/yuzu/CMakeLists.txt b/src/yuzu/CMakeLists.txt
-index 2052b63394..d11d8fa0bd 100644
+index 2052b63394..7a959ba3f1 100644
 --- a/src/yuzu/CMakeLists.txt
 +++ b/src/yuzu/CMakeLists.txt
 @@ -140,6 +140,8 @@ add_executable(yuzu
@@ -1955,13 +1971,13 @@ index 2052b63394..d11d8fa0bd 100644
  create_target_directory_groups(yuzu)
 +
 +if (ENABLE_RENHDRUM AND RENHDRUM_DOWNLOAD AND WIN32)
-+    set(RENHDRUM_VERSION 0.1.1)
++    set(RENHDRUM_VERSION 0.2.1)
 +    set(RENHDRUM_DLL "${CMAKE_BINARY_DIR}/renhdrum/${RENHDRUM_VERSION}/renhdrum.dll")
 +    if (NOT EXISTS "${RENHDRUM_DLL}")
 +        file(DOWNLOAD
 +            "https://github.com/trzz1214/RenHDrum/releases/download/v${RENHDRUM_VERSION}/renhdrum.dll"
 +            "${RENHDRUM_DLL}"
-+            EXPECTED_HASH SHA256=b087712e84d481800e31578130a7d82c7811ad1d10f897504a8e7a8ec49489ce
++            EXPECTED_HASH SHA256=35bce3b64a851405ead5484a51d36e51d7ed654f9f5295bd9abce61fdc4e69f1
 +            SHOW_PROGRESS)
 +    endif()
 +    add_custom_command(TARGET yuzu POST_BUILD
