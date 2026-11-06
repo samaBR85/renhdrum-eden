@@ -1,4 +1,4 @@
-From 133e160b75c9a0ab6097e972292cd05c3a11b933 Mon Sep 17 00:00:00 2001
+From 57ff7c85263ba5bc6b4854f36da792b365068898 Mon Sep 17 00:00:00 2001
 From: samaBR85 <sama85@gmail.com>
 Date: Fri, 6 Nov 2026 03:47:58 -0300
 Subject: [PATCH 1/2] input: HD Rumble and DualSense haptics through RenHDrum
@@ -41,15 +41,15 @@ Feito com Claude Code
  src/common/settings.h                         |  29 +
  src/hid_core/frontend/emulated_controller.cpp |   8 +
  src/input_common/CMakeLists.txt               |  10 +
- src/input_common/drivers/renhdrum_pad.cpp     | 643 ++++++++++++++++++
+ src/input_common/drivers/renhdrum_pad.cpp     | 651 ++++++++++++++++++
  src/input_common/drivers/renhdrum_pad.h       |  56 ++
  src/input_common/drivers/sdl_driver.cpp       |  84 ++-
  src/input_common/drivers/sdl_driver.h         |   2 +-
- src/yuzu/CMakeLists.txt                       |  17 +
+ src/yuzu/CMakeLists.txt                       |  20 +
  .../configuration/configure_hd_rumble.cpp     | 282 ++++++++
  src/yuzu/configuration/configure_hd_rumble.h  |  59 ++
  .../configuration/configure_vibration.cpp     |  16 +
- 18 files changed, 2072 insertions(+), 4 deletions(-)
+ 18 files changed, 2083 insertions(+), 4 deletions(-)
  create mode 100644 .patch/sdl3-hdrumble/0001-hdrumble.patch
  create mode 100644 .patch/sdl3-hdrumble/0002-hdrumble-idle-write.patch
  create mode 100644 externals/renhdrum/renhdrum.h
@@ -1073,10 +1073,10 @@ index 840602f4ce..4c7f5efc39 100644
 +endif()
 diff --git a/src/input_common/drivers/renhdrum_pad.cpp b/src/input_common/drivers/renhdrum_pad.cpp
 new file mode 100644
-index 0000000000..ed0219e9d6
+index 0000000000..7888114d9c
 --- /dev/null
 +++ b/src/input_common/drivers/renhdrum_pad.cpp
-@@ -0,0 +1,643 @@
+@@ -0,0 +1,651 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -1414,7 +1414,15 @@ index 0000000000..ed0219e9d6
 +                // Start only once published: from here on, the DSP is replaced or freed only
 +                // under SDL_LockAudioStream or after SDL_DestroyAudioStream. The callback never
 +                // takes `mutex`.
-+                SDL_ResumeAudioStreamDevice(stream);
++                if (!SDL_ResumeAudioStreamDevice(stream)) {
++                    // Not playing: unpublish so vibration falls back to standard rumble and
++                    // the remaining retries can still open the device. The callback never ran.
++                    LOG_WARNING(Input, "RenHDrum: DualSense audio did not start: {}",
++                                SDL_GetError());
++                    audio_stream = nullptr;
++                    audio_inited = false;
++                    opened = false;
++                }
 +            }
 +        }
 +        if (!opened) {
@@ -1953,7 +1961,7 @@ index e6751b6688..c04a823433 100644
      std::atomic<bool> initialized = false;
      bool start_thread;
 diff --git a/src/yuzu/CMakeLists.txt b/src/yuzu/CMakeLists.txt
-index 2052b63394..7a959ba3f1 100644
+index 2052b63394..da57cc2efc 100644
 --- a/src/yuzu/CMakeLists.txt
 +++ b/src/yuzu/CMakeLists.txt
 @@ -140,6 +140,8 @@ add_executable(yuzu
@@ -1965,12 +1973,15 @@ index 2052b63394..7a959ba3f1 100644
      configuration/configure_vibration.cpp
      configuration/configure_vibration.h
      configuration/configure_vibration.ui
-@@ -481,3 +483,18 @@ endif()
+@@ -481,3 +483,21 @@ endif()
  target_link_libraries(yuzu PRIVATE OpenSSL::SSL OpenSSL::Crypto SDL3::SDL3)
  
  create_target_directory_groups(yuzu)
 +
-+if (ENABLE_RENHDRUM AND RENHDRUM_DOWNLOAD AND WIN32)
++if (ENABLE_RENHDRUM AND RENHDRUM_DOWNLOAD AND WIN32 AND NOT ARCHITECTURE_x86_64)
++    message(WARNING "RENHDRUM_DOWNLOAD: the prebuilt renhdrum.dll is x64 only; skipped for this architecture")
++endif()
++if (ENABLE_RENHDRUM AND RENHDRUM_DOWNLOAD AND WIN32 AND ARCHITECTURE_x86_64)
 +    set(RENHDRUM_VERSION 0.2.1)
 +    set(RENHDRUM_DLL "${CMAKE_BINARY_DIR}/renhdrum/${RENHDRUM_VERSION}/renhdrum.dll")
 +    if (NOT EXISTS "${RENHDRUM_DLL}")
