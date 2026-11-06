@@ -34,11 +34,12 @@ For how HD Rumble works and how RenHDrum reproduces it, read the RenHDrum author
 
 ## Compatibility
 
-The series was written against **Lichii `frizti-v1`** ([Frizti/Lichii](https://github.com/Frizti/Lichii)), which is where it was built and played. Weekly CI checks that it still applies to these trees:
+The series was written against **Lichii `frizti-v1`** ([Frizti/Lichii](https://github.com/Frizti/Lichii)), which is where it was built and played, and carried unchanged to `frizti-v2`. Weekly CI checks that it still applies to these trees:
 
 | Tree | Branch | Applies | Built and played |
 |---|---|---|---|
 | [Frizti/Lichii](https://github.com/Frizti/Lichii) | `frizti-v1` tag | ✅ | ✅ Windows x64, MSVC |
+| [Frizti/Lichii](https://github.com/Frizti/Lichii) | `frizti-v2` tag | ✅ | ✅ built (Windows x64, MSVC) |
 | [Frizti/Lichii](https://github.com/Frizti/Lichii) | `nx2` | ✅ | not yet |
 | [zortos293/Lichii](https://github.com/zortos293/Lichii) | `nx2` | ✅ | not yet |
 | [Djihads80/Eglantine](https://github.com/Djihads80/Eglantine) | `nx2` | ✅ | not yet |

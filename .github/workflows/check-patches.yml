@@ -24,6 +24,9 @@ jobs:
           - name: Frizti/Lichii frizti-v1
             repo: https://github.com/Frizti/Lichii.git
             ref: refs/tags/frizti-v1
+          - name: Frizti/Lichii frizti-v2
+            repo: https://github.com/Frizti/Lichii.git
+            ref: refs/tags/frizti-v2
           - name: Frizti/Lichii nx2
             repo: https://github.com/Frizti/Lichii.git
             ref: refs/heads/nx2
