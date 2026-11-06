@@ -175,17 +175,18 @@ Set `EDEN_HDRUMBLE_TRACE=1`, either in the environment or in `nx2_switches.txt` 
 
 ## Findings: Ocarina of Time
 
-The trace was recorded on Lichii with a wired DualSense Edge, about two minutes of play per game:
+Recorded with the trace on Lichii with a wired DualSense Edge, and weighted by how long each value held. The files and the full table are in [`research/traces`](research/traces/):
 
-| | The Legend of Zelda: Ocarina of Time (Switch 2, `0400486024DEC000`) | Donkey Kong Bananza |
+| | Ocarina of Time (Switch 2, `0400486024DEC000`), two sessions | Donkey Kong Bananza |
 |---|---|---|
 | Command / mode | 214, Mode 2 | 214, Mode 2 |
-| Peak amplitude | **0.096** | 0.534 |
-| Median amplitude (when vibrating) | 0.003 | 0.009 |
-| Samples above 0.1 | **none** | ~1,500 |
-| Frequency range | 40-330 Hz | 40-510 Hz |
+| Median amplitude while vibrating | 0.001 / 0.006 | 0.014 |
+| 99th percentile | 0.096 / 0.111 | 0.234 |
+| Peak | 0.096 / 0.178 | 0.401 |
+| Vibrating time at 0.1 or more | 0 % / 1.5 % | 8.3 % |
+| Frequency range | 42-341 Hz | 30-504 Hz |
 
-Ocarina of Time never sends an amplitude above 0.1, yet it rumbles strongly on a Switch 2. Played as sent, it feels as weak as an emulator's default rumble. **Intensity 1000 % with weak rumble boost 60 %** came close to the console.
+Ocarina of Time sends weaker amplitudes than Donkey Kong Bananza at every level, and rarely goes above 0.1, yet it rumbles strongly on a Switch 2. Played as sent, it feels as weak as an emulator's default rumble. **Intensity 1000 % with weak rumble boost 60 %** came close to the console.
 
 This fits the "equalization between hardware generations" that the RenHDrum author found in Nintendo patent filings (see [research/11](https://github.com/trzz1214/RenHDrum/blob/main/docs/research/11-switch2-hd-rumble.md)): the console seems to scale Mode 2 amplitudes for its own actuators. With traces from more games, it might become a curve applied automatically rather than per game.
 
