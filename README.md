@@ -6,7 +6,7 @@ This repository is a **patch series**. You apply it to an emulator's source tree
 
 | Patch | What it adds |
 |---|---|
-| `0001` | Vibration routed through RenHDrum: HD Rumble packets for Switch controllers, 48 kHz audio haptics for a wired DualSense. Includes an **HD Rumble** settings dialog with a per-game **Intensity** and **Weak rumble boost**. |
+| `0001` | Vibration routed through RenHDrum: HD Rumble packets for Switch controllers, haptics for a DualSense, wired or on Bluetooth. Includes an **HD Rumble** settings dialog with a per-game **Intensity** and **Weak rumble boost**. |
 | `0002` | `EDEN_HDRUMBLE_TRACE=1`: writes every vibration value a game sends to a CSV, for studying a game's HD Rumble. Optional; it depends on HID command 214, which Eglantine and Lichii have. |
 
 The same change is proposed upstream: see [Upstream status](#upstream-status).
@@ -20,8 +20,8 @@ Switch and Switch 2 games describe vibration as two bands (low and high), each w
 | Controller | Connection | What you get |
 |---|---|---|
 | Nintendo Switch Pro Controller, Joy-Con | USB or Bluetooth | Real HD Rumble packets: 5 ms AM/FM envelope, frequency changes inside a packet, "crisp notes" (stronger attack, softer sustain), Bluetooth pacing that keeps input lag down |
-| Sony DualSense / DualSense Edge | **USB** | The vibration played as 4-channel 48 kHz audio on the controller's haptic voice coils, the most detailed rumble available on PC |
-| Sony DualSense / DualSense Edge | Bluetooth | Standard rumble (unchanged) |
+| Sony DualSense / DualSense Edge | USB | The vibration played as 4-channel 48 kHz audio on the controller's haptic voice coils, the most detailed rumble available on PC |
+| Sony DualSense / DualSense Edge | Bluetooth | The same voice-coil haptics, sent as HID output report `0x32` every 10.667 ms while the game vibrates. Needs RenHDrum 0.2.1 or newer; an older DLL keeps the standard rumble. |
 | Other controllers | any | Standard rumble (unchanged) |
 
 RenHDrum is a separate library, `renhdrum.dll`, that the emulator **loads at runtime**. If it is not next to the emulator, nothing changes: every controller keeps the standard rumble.
@@ -47,7 +47,7 @@ Weekly CI checks that the series still applies to these trees:
 
 [![Check patches](https://github.com/samaBR85/renhdrum-eden/actions/workflows/check-patches.yml/badge.svg)](https://github.com/samaBR85/renhdrum-eden/actions/workflows/check-patches.yml)
 
-It was played on Windows with a wired DualSense Edge, in Ocarina of Time and Donkey Kong Bananza, on Lichii `frizti-v1` and `frizti-v2`. Those play tests used an earlier layout of the same code (inline in the SDL driver). The current layout was then run on `zortos293/Lichii nx2`: the downloaded `renhdrum.dll` loaded, the DualSense was picked up, its haptics audio device opened, and the emulator closed cleanly. The current layout is also played day to day on `K-code-AI/Lichii build-4` with RenHDrum v0.2.1. No Switch Pro Controller was available for testing.
+It was played on Windows with a wired DualSense Edge, in Ocarina of Time and Donkey Kong Bananza, on Lichii `frizti-v1` and `frizti-v2`. Those play tests used an earlier layout of the same code (inline in the SDL driver). The current layout was then run on `zortos293/Lichii nx2`: the downloaded `renhdrum.dll` loaded, the DualSense was picked up, its haptics audio device opened, and the emulator closed cleanly. The current layout is also played day to day on `K-code-AI/Lichii build-4` with RenHDrum v0.2.1. DualSense haptics over Bluetooth were played on the same build and feel the same as wired. No Switch Pro Controller was available for testing.
 
 Upstream [Eden](https://git.eden-emu.dev/eden-emu/eden) and other forks share the same input code and should take the series with little or no change, but have not been tried. If you port it to another fork, a pull request adding it to this table is welcome.
 
@@ -105,6 +105,12 @@ Nothing to switch on: a supported controller uses RenHDrum as soon as it connect
 RenHDrum: loaded renhdrum.dll
 RenHDrum: DualSense haptics for 054C:0DF2
 RenHDrum: DualSense haptics on "Speakers (DualSense Edge Wireless Controller)"
+```
+
+or, for a DualSense on Bluetooth:
+
+```
+RenHDrum: DualSense haptics over Bluetooth (report 0x32)
 ```
 
 or, for a Switch controller:
@@ -208,7 +214,6 @@ This fits the "equalization between hardware generations" that the RenHDrum auth
 - **Command 213 is a stub** in Eglantine and Lichii. A game that vibrates only through it stays silent; this series does not change that.
 - **Xbox One controllers:** the four-motor translation RenHDrum supports is not in this series yet. They use standard rumble.
 - **Switch 2 Pro Controller and Joy-Con 2:** not supported by RenHDrum yet.
-- **DualSense over Bluetooth** uses standard rumble. RenHDrum has Bluetooth haptics (report `0x32`), but this series does not wire it up yet.
 
 ---
 
@@ -216,7 +221,7 @@ This fits the "equalization between hardware generations" that the RenHDrum auth
 
 This series is a port and extension of other people's work:
 
-- **[RenHDrum](https://github.com/trzz1214/RenHDrum)** by **Three-Dola** ([trzz1214](https://github.com/trzz1214)): the HD Rumble and DualSense haptics engine, the [SDL3 HD Rumble patches](https://github.com/trzz1214/RenHDrum/tree/main/integrations/sdl3/sdl3-patches), and the [Brontide reference patches](https://github.com/trzz1214/RenHDrum/tree/main/integrations/brontide) that patch `0001` started from. Their [research notebook](https://ryuhdr.threedola.workers.dev) explains the whole subject. RenHDrum in turn credits dekuNukem, the Switchbrew wiki contributors, felipearmat, rei-github, ClearlyClaire, CTCaer, Nielk1, egormanga, the SDL team and others: see [its credits](https://github.com/trzz1214/RenHDrum#research-credits--acknowledgments) and [NOTICE](https://github.com/trzz1214/RenHDrum/blob/main/NOTICE).
+- **[RenHDrum](https://github.com/trzz1214/RenHDrum)** by **Three-Dola** ([trzz1214](https://github.com/trzz1214)): the HD Rumble and DualSense haptics engine, the [SDL3 HD Rumble patches](https://github.com/trzz1214/RenHDrum/tree/main/integrations/sdl3/sdl3-patches), and the [Brontide reference patches](https://github.com/trzz1214/RenHDrum/tree/main/integrations/brontide) that patch `0001` started from, including the DualSense Bluetooth haptics of patch 0011. Their [research notebook](https://ryuhdr.threedola.workers.dev) explains the whole subject. RenHDrum in turn credits dekuNukem, the Switchbrew wiki contributors, felipearmat, rei-github, ClearlyClaire, CTCaer, Nielk1, egormanga, the SDL team and others: see [its credits](https://github.com/trzz1214/RenHDrum#research-credits--acknowledgments) and [NOTICE](https://github.com/trzz1214/RenHDrum/blob/main/NOTICE).
 - **neo Luigi**, for HID command 214 (`SendVibrationValuesInMode`) dispatching in [Eglantine PR #155](https://github.com/eglantine-emu/eglantine/pull/155). That is what carries Switch 2 vibration to the input layer.
 - **[Eden](https://git.eden-emu.dev/eden-emu/eden)** and the yuzu project, the emulator these trees come from.
 - **[Eglantine](https://github.com/Djihads80/Eglantine)** (Djihads80), the Switch 2 Eden fork; **[Lichii](https://github.com/zortos293/Lichii)** (zortos293); and **[Frizti/Lichii](https://github.com/Frizti/Lichii)** (Frizti), the tree this series was built and tested on.
