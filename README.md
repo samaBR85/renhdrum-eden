@@ -127,9 +127,9 @@ Open it from **Emulation > Configure > Controls > Vibration: Configure > HD Rumb
 
    ![Configure Vibration with the HD Rumble button](docs/screenshots/vibration-dialog.png)
 
-3. The HD Rumble dialog. This one was opened with Ocarina of Time running, so **Intensity** and **Weak rumble boost** show that game's own values (1000 % and 60 %). This screenshot was taken before the percent fields were widened; `1000%` is cut off.
+3. The HD Rumble dialog, on the Switch Controller page, with **Intensity** and **Weak rumble boost** at 1000 % and 60 %, the values that suit Ocarina of Time.
 
-   ![The HD Rumble dialog on the DualSense page](docs/screenshots/hd-rumble-dialog.png)
+   ![The HD Rumble dialog on the Switch Controller page](docs/screenshots/hd-rumble-dialog.png)
 
 What each setting does:
 
