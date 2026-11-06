@@ -1,38 +1,68 @@
-From 842bca7fc1714de50d1ac1e928b557356a588d2a Mon Sep 17 00:00:00 2001
+From 9ed181a7b52540b80d5b28d17480db7fbc024352 Mon Sep 17 00:00:00 2001
 From: samaBR85 <sama85@gmail.com>
-Date: Thu, 5 Nov 2026 22:53:13 -0300
-Subject: [PATCH 1/4] input: HD Rumble and DualSense haptics through RenHDrum
+Date: Fri, 6 Nov 2026 02:01:58 -0300
+Subject: [PATCH 1/2] input: HD Rumble and DualSense haptics through RenHDrum
 
-Routes the controller vibration of the SDL driver into RenHDrum
-(https://github.com/trzz1214/RenHDrum): Switch Pro Controller / Joy-Con get
-5 ms AM/FM HD Rumble packets, a wired DualSense gets 48 kHz audio haptics on
-its voice coils. SDL3 3.4.8 is built from source with RenHDrum's two
-HD Rumble transport patches (no-queue / write-after-input).
+Plays controller vibration through RenHDrum
+(https://github.com/trzz1214/RenHDrum) when renhdrum.dll is next to the
+emulator: Switch Pro Controller / Joy-Con get HD Rumble packets with a
+5 ms AM/FM envelope, a wired DualSense gets the vibration as 4-channel
+48 kHz audio on its haptic voice coils. Without the library, or for other
+controllers, nothing changes.
 
-Port of the Brontide reference patches 0002-0007 by Three-Dola
-(integrations/brontide in RenHDrum, GPL-3.0-or-later) to an Eden-family
-tree, with the conflicts resolved by hand. msvc_compat.cpp from 0002 is
-left out: it only works around static Qt prebuilts.
+- input_common/drivers/renhdrum_pad: the library is loaded at runtime
+  (Common::DynamicLibrary), nothing links against it. The SDL driver only
+  creates a pad per controller, ticks it from PumpEvents and offers it each
+  vibration first. No SDL joystick call is made while the pad mutex is held.
+- HD Rumble dialog (Controls > Vibration > HD Rumble...): on/off, wired and
+  Bluetooth packet options, DualSense volume, and a per-game intensity and
+  weak rumble boost. Some Switch 2 games never send amplitudes above 0.1:
+  The Legend of Zelda: Ocarina of Time peaks at 0.096 through command 214,
+  Donkey Kong Bananza at 0.53.
+- ENABLE_RENHDRUM (ON) builds the support. RENHDRUM_DOWNLOAD (OFF) fetches
+  the v0.1.1 renhdrum.dll, SHA-256 checked, next to the executable on
+  Windows. RENHDRUM_SDL_PATCHES (OFF) builds SDL3 from source with
+  RenHDrum's two HD Rumble transport patches (sdl3-hdrumble).
+- externals/renhdrum/renhdrum.h: the RenHDrum v0.1.1 C ABI header
+  (MIT OR Apache-2.0).
+
+Based on RenHDrum's Brontide reference patches by Three-Dola
+(integrations/brontide, GPL-3.0-or-later).
 
 Feito com Claude Code
 ---
- .patch/sdl3/0001-hdrumble.patch               |  50 ++
- .patch/sdl3/0002-hdrumble-idle-write.patch    | 486 ++++++++++++++++++
- cpmfile.json                                  |   4 +
- src/hid_core/frontend/emulated_controller.cpp |  12 +-
- src/input_common/CMakeLists.txt               |   8 +
- src/input_common/drivers/sdl_driver.cpp       | 354 ++++++++++++-
- src/input_common/drivers/sdl_driver.h         |   3 +-
- src/yuzu/CMakeLists.txt                       |  10 +
- 8 files changed, 914 insertions(+), 13 deletions(-)
- create mode 100644 .patch/sdl3/0001-hdrumble.patch
- create mode 100644 .patch/sdl3/0002-hdrumble-idle-write.patch
+ .patch/sdl3-hdrumble/0001-hdrumble.patch      |  50 ++
+ .../0002-hdrumble-idle-write.patch            | 486 +++++++++++++
+ .reuse/dep5                                   |  10 +
+ CMakeLists.txt                                |  12 +
+ cpmfile.json                                  |  11 +
+ externals/CMakeLists.txt                      |   7 +-
+ externals/renhdrum/renhdrum.h                 | 278 ++++++++
+ src/common/settings.h                         |  29 +
+ src/hid_core/frontend/emulated_controller.cpp |   8 +
+ src/input_common/CMakeLists.txt               |  10 +
+ src/input_common/drivers/renhdrum_pad.cpp     | 639 ++++++++++++++++++
+ src/input_common/drivers/renhdrum_pad.h       |  56 ++
+ src/input_common/drivers/sdl_driver.cpp       |  84 ++-
+ src/input_common/drivers/sdl_driver.h         |   2 +-
+ src/yuzu/CMakeLists.txt                       |  17 +
+ .../configuration/configure_hd_rumble.cpp     | 289 ++++++++
+ src/yuzu/configuration/configure_hd_rumble.h  |  59 ++
+ .../configuration/configure_vibration.cpp     |  16 +
+ 18 files changed, 2059 insertions(+), 4 deletions(-)
+ create mode 100644 .patch/sdl3-hdrumble/0001-hdrumble.patch
+ create mode 100644 .patch/sdl3-hdrumble/0002-hdrumble-idle-write.patch
+ create mode 100644 externals/renhdrum/renhdrum.h
+ create mode 100644 src/input_common/drivers/renhdrum_pad.cpp
+ create mode 100644 src/input_common/drivers/renhdrum_pad.h
+ create mode 100644 src/yuzu/configuration/configure_hd_rumble.cpp
+ create mode 100644 src/yuzu/configuration/configure_hd_rumble.h
 
-diff --git a/.patch/sdl3/0001-hdrumble.patch b/.patch/sdl3/0001-hdrumble.patch
+diff --git a/.patch/sdl3-hdrumble/0001-hdrumble.patch b/.patch/sdl3-hdrumble/0001-hdrumble.patch
 new file mode 100644
 index 0000000000..bea2b5bb90
 --- /dev/null
-+++ b/.patch/sdl3/0001-hdrumble.patch
++++ b/.patch/sdl3-hdrumble/0001-hdrumble.patch
 @@ -0,0 +1,50 @@
 +--- a/src/joystick/hidapi/SDL_hidapi_switch.c
 ++++ b/src/joystick/hidapi/SDL_hidapi_switch.c
@@ -84,11 +114,11 @@ index 0000000000..bea2b5bb90
 + #ifdef DEBUG_RUMBLE
 +             SDL_Log("Sent continuing rumble, %d ms after previous rumble", now - ctx->m_ulRumbleSent);
 + #endif
-diff --git a/.patch/sdl3/0002-hdrumble-idle-write.patch b/.patch/sdl3/0002-hdrumble-idle-write.patch
+diff --git a/.patch/sdl3-hdrumble/0002-hdrumble-idle-write.patch b/.patch/sdl3-hdrumble/0002-hdrumble-idle-write.patch
 new file mode 100644
 index 0000000000..f3d39118a5
 --- /dev/null
-+++ b/.patch/sdl3/0002-hdrumble-idle-write.patch
++++ b/.patch/sdl3-hdrumble/0002-hdrumble-idle-write.patch
 @@ -0,0 +1,486 @@
 +--- a/src/joystick/hidapi/SDL_hidapi_rumble.c
 ++++ b/src/joystick/hidapi/SDL_hidapi_rumble.c
@@ -576,329 +606,844 @@ index 0000000000..f3d39118a5
 + extern bool HIDAPI_SupportsPlaystationDetection(Uint16 vendor, Uint16 product);
 + 
 + extern float HIDAPI_RemapVal(float val, float val_min, float val_max, float output_min, float output_max);
+diff --git a/.reuse/dep5 b/.reuse/dep5
+index 801ea51698..f613cf8b89 100644
+--- a/.reuse/dep5
++++ b/.reuse/dep5
+@@ -190,3 +190,13 @@ License: GPL-3.0-or-later
+ Comment: CPM.cmake has had additional modifications from crueter to better work with CPMUtil
+          https://git.crueter.xyz/CMake/CPMUtil
+          https://git.crueter.xyz/CMake/Modules
++
++Files: externals/renhdrum/renhdrum.h
++Copyright: 2026 Three-Dola
++License: MIT OR Apache-2.0
++Comment: Public C ABI header of RenHDrum v0.1.1, https://github.com/trzz1214/RenHDrum
++
++Files: .patch/sdl3-hdrumble/*
++Copyright: 2026 Three-Dola
++License: Zlib
++Comment: RenHDrum SDL3 HD Rumble patches, https://github.com/trzz1214/RenHDrum/tree/main/integrations/sdl3/sdl3-patches
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 6f2a86b708..69fe97592e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -248,6 +248,18 @@ endif()
+ 
+ option(YUZU_USE_BUNDLED_SDL3 "Download bundled SDL3 build" ${EXT_DEFAULT})
+ 
++# RenHDrum (https://github.com/trzz1214/RenHDrum): HD Rumble for Switch controllers and audio
++# haptics for a wired DualSense. The library is loaded at runtime; without it the standard rumble
++# is used.
++option(ENABLE_RENHDRUM "Play controller vibration through RenHDrum when renhdrum.dll is present" ON)
++option(RENHDRUM_DOWNLOAD "Download the prebuilt renhdrum.dll next to the executable (Windows x64)" OFF)
++cmake_dependent_option(RENHDRUM_SDL_PATCHES
++    "Build SDL3 from source with RenHDrum's HD Rumble transport patches" OFF "ENABLE_RENHDRUM" OFF)
++if (RENHDRUM_SDL_PATCHES AND YUZU_USE_BUNDLED_SDL3)
++    message(STATUS "RENHDRUM_SDL_PATCHES: building SDL3 from source instead of the bundled build")
++    set(YUZU_USE_BUNDLED_SDL3 OFF)
++endif()
++
+ # ffmpeg
+ option(YUZU_USE_BUNDLED_FFMPEG "Download bundled FFmpeg" ${EXT_DEFAULT})
+ cmake_dependent_option(YUZU_USE_EXTERNAL_FFMPEG "Build FFmpeg from external source" "${SOLARIS}" "NOT WIN32 AND NOT ANDROID" OFF)
 diff --git a/cpmfile.json b/cpmfile.json
-index 6e55707f36..e09d37e87a 100644
+index 6e55707f36..a5eb80e883 100644
 --- a/cpmfile.json
 +++ b/cpmfile.json
-@@ -255,6 +255,10 @@
-         "hash": "df5a323af7ac366661a3c0e887969c72584d232f3cc211419d59b0487b620b6b2859d4549c9e8df002ee489290062e466fcfddf7edc0872a37b1f2845e81c0f3",
-         "min_version": "3.2.10",
-         "package": "SDL3",
-+        "patches": [
-+            "0001-hdrumble.patch",
-+            "0002-hdrumble-idle-write.patch"
-+        ],
+@@ -258,6 +258,17 @@
          "repo": "libsdl-org/SDL",
          "version": "release-3.4.8"
      },
++    "sdl3-hdrumble": {
++        "hash": "df5a323af7ac366661a3c0e887969c72584d232f3cc211419d59b0487b620b6b2859d4549c9e8df002ee489290062e466fcfddf7edc0872a37b1f2845e81c0f3",
++        "min_version": "3.2.10",
++        "package": "SDL3",
++        "repo": "libsdl-org/SDL",
++        "version": "release-3.4.8",
++        "patches": [
++            "0001-hdrumble.patch",
++            "0002-hdrumble-idle-write.patch"
++        ]
++    },
+     "sdl3-ci": {
+         "ci": true,
+         "name": "SDL3",
+diff --git a/externals/CMakeLists.txt b/externals/CMakeLists.txt
+index cb1deceb96..8a06017378 100644
+--- a/externals/CMakeLists.txt
++++ b/externals/CMakeLists.txt
+@@ -162,7 +162,12 @@ if (NOT YUZU_USE_BUNDLED_SDL3)
+         set(SDL_FILE ON)
+     endif()
+ 
+-    AddJsonPackage(sdl3)
++    if (RENHDRUM_SDL_PATCHES)
++        # SDL 3.4.8 with RenHDrum's HD Rumble transport modes (no-queue / write-after-input)
++        AddJsonPackage(NAME sdl3-hdrumble FORCE_BUNDLED_PACKAGE ON)
++    else()
++        AddJsonPackage(sdl3)
++    endif()
+ else()
+     message(STATUS "Using bundled SDL3")
+     AddJsonPackage(sdl3-ci)
+diff --git a/externals/renhdrum/renhdrum.h b/externals/renhdrum/renhdrum.h
+new file mode 100644
+index 0000000000..6f40dadf32
+--- /dev/null
++++ b/externals/renhdrum/renhdrum.h
+@@ -0,0 +1,278 @@
++#ifndef RENHDRUM_H
++#define RENHDRUM_H
++
++#include <stdint.h>
++#include <stdbool.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define RENHDRUM_VERSION 0x000101
++
++#define RENHDRUM_OK 0
++#define RENHDRUM_ERR_NULL_PTR -1
++#define RENHDRUM_ERR_INVALID_ARG -2
++#define RENHDRUM_ERR_DECODE_FAILED -3
++
++typedef struct RenHdcSettings {
++    bool enabled;
++    int32_t usb_interval_ms;
++    int32_t bluetooth_level;
++    bool usb_auto_slow;
++    bool sync_to_input;
++    bool click_pulse;
++    bool sync_bluetooth;
++    bool usb_no_queue;
++    int32_t usb_pause_ms;
++    bool envelope_5ms;
++    bool frequency_in_packet;
++    bool frequency_both_bands;
++    bool bt_after_input;
++    bool crisp_notes;
++    bool bt_crisp_notes;
++    bool bt_fast;
++} RenHdcSettings;
++
++typedef struct RenHdcConfig {
++    bool enable_hd_rumble;
++    int32_t hd_rumble_usb_interval_ms;
++    int32_t hd_rumble_bluetooth_level;
++    bool hd_rumble_usb_auto_slow;
++    bool hd_rumble_experimental_usb_no_queue;
++    bool hd_rumble_experimental_envelope_5ms;
++    bool hd_rumble_experimental_frequency_in_packet;
++    bool hd_rumble_experimental_frequency_both_bands;
++    bool hd_rumble_experimental_bt_after_input;
++    bool hd_rumble_experimental_bt_fast;
++    bool hd_rumble_experimental_crisp_notes;
++    bool hd_rumble_experimental_bt_crisp_notes;
++    bool hd_rumble_experimental_sync_to_input;
++    bool hd_rumble_experimental_click_pulse;
++    bool hd_rumble_experimental_sync_bluetooth;
++    bool hd_rumble_sync_auto_slow;
++    float strong_rumble;
++    float weak_rumble;
++    bool enable_rumble;
++    bool enable_adaptive_triggers;
++    bool enable_dualsense_haptics;
++    int32_t dualsense_haptics_volume;
++    bool dualsense_crisp_notes;
++    bool dualsense_bt_crisp_notes;
++} RenHdcConfig;
++
++typedef struct RenHdSideSample {
++    float amp_low;
++    float freq_low;
++    float amp_high;
++    float freq_high;
++} RenHdSideSample;
++
++typedef struct RenHdClickSide {
++    int32_t kind; /* 0 = DualResonance3Pulse, 1 = SingleWaveResonance */
++    int32_t res_high_code;
++    int32_t res_low_code;
++    int32_t pulse1_code;
++    int32_t pulse2_code;
++    bool res_high_off;
++    bool res_low_off;
++    bool pulse1_off;
++    bool pulse2_off;
++    int32_t amp7;
++    int32_t freq7;
++    bool freq_is_high;
++} RenHdClickSide;
++
++uint32_t renhdrum_version(void);
++
++int32_t renhdrum_settings_default(RenHdcSettings *out_settings);
++int32_t renhdrum_settings_resolve(const RenHdcConfig *config, RenHdcSettings *out_settings);
++
++int32_t renhdrum_preset_apply(int32_t kind, RenHdcConfig *config);
++int32_t renhdrum_preset_detect(const RenHdcConfig *config, int32_t *out_kind);
++
++int32_t renhdrum_encode_standard_side(
++    float low_freq,
++    float low_amp,
++    float high_freq,
++    float high_amp,
++    uint8_t *out_bytes4
++);
++
++int32_t renhdrum_encode_standard_packet(
++    float left_lf,
++    float left_la,
++    float left_hf,
++    float left_ha,
++    float right_lf,
++    float right_la,
++    float right_hf,
++    float right_ha,
++    uint8_t *out_bytes8
++);
++
++int32_t renhdrum_amfm_game_amplitude(int32_t code, float *out_amp);
++int32_t renhdrum_amfm_code(float game_amp);
++int32_t renhdrum_amfm_freq7(int32_t high, float freq);
++int32_t renhdrum_amfm_amp7(float game_amplitude);
++int32_t renhdrum_amfm_preset_code(int32_t high, int32_t freq7);
++
++int32_t renhdrum_amfm_pack_three(
++    int32_t lo0,
++    int32_t hi0,
++    int32_t lo1,
++    int32_t hi1,
++    int32_t lo2,
++    int32_t hi2,
++    uint32_t *out_val
++);
++
++int32_t renhdrum_amfm_pack_three_7bit(
++    int32_t high,
++    int32_t is_fm,
++    int32_t value7,
++    int32_t lo1,
++    int32_t hi1,
++    int32_t lo2,
++    int32_t hi2,
++    uint32_t *out_val
++);
++
++int32_t renhdrum_amfm_pack_two_14bit(
++    int32_t high,
++    int32_t freq7,
++    int32_t amp7,
++    int32_t other0,
++    int32_t lo1,
++    int32_t hi1,
++    uint32_t *out_val
++);
++
++int32_t renhdrum_amfm_pack_two_14bit_level(
++    int32_t high,
++    int32_t freq7,
++    float game_amplitude,
++    int32_t other0,
++    int32_t lo1,
++    int32_t hi1,
++    uint32_t *out_val
++);
++
++int32_t renhdrum_amfm_pack_two_14bit_reach(
++    int32_t high,
++    int32_t freq7,
++    float game_amplitude,
++    int32_t reach_code,
++    float other_amplitude,
++    int32_t lo1,
++    int32_t hi1,
++    uint32_t *out_val
++);
++
++int32_t renhdrum_amfm_is_three_sample_side(const uint8_t *in_bytes4);
++
++int32_t renhdrum_click_amp4(float amplitude);
++int32_t renhdrum_click_amp7(float amplitude);
++int32_t renhdrum_click_build_packet(float amp_l, float amp_r, uint8_t *out_packet10);
++
++int32_t renhdrum_click_encode_side(const RenHdClickSide *side, uint8_t *out_bytes4);
++int32_t renhdrum_click_decode_side(const uint8_t *in_bytes4, RenHdClickSide *out_side);
++int32_t renhdrum_click_is_dual_wave_side(const uint8_t *in_bytes4);
++int32_t renhdrum_click_is_click_packet(const uint8_t *in_bytes10);
++
++float renhdrum_crisp_slot_gain(int32_t slots_since_onset);
++int32_t renhdrum_crisp_apply(
++    const RenHdSideSample *s,
++    float gain,
++    RenHdSideSample *out_sample,
++    int32_t *out_capped
++);
++int32_t renhdrum_crisp_shape_slot(
++    int32_t *slots_since_onset,
++    const RenHdSideSample *s,
++    RenHdSideSample *out_sample,
++    int32_t *out_onset,
++    int32_t *out_capped
++);
++
++/* Opaque pointer types for stateful engines */
++typedef struct RenHdcEngine RenHdcEngine;
++typedef struct RenHdcDualSenseDsp RenHdcDualSenseDsp;
++
++RenHdcEngine *renhdrum_engine_create(bool is_bluetooth, bool is_pro_controller);
++void renhdrum_engine_destroy(RenHdcEngine *engine);
++int32_t renhdrum_engine_apply_settings(RenHdcEngine *engine, const RenHdcSettings *settings);
++int32_t renhdrum_engine_push_sample(
++    RenHdcEngine *engine,
++    int64_t now_us,
++    float left_al,
++    float left_fl,
++    float left_ah,
++    float left_fh,
++    float right_al,
++    float right_fl,
++    float right_ah,
++    float right_fh
++);
++int32_t renhdrum_engine_push_half_sample(
++    RenHdcEngine *engine,
++    int64_t now_us,
++    bool is_right,
++    float al,
++    float fl,
++    float ah,
++    float fh
++);
++int32_t renhdrum_engine_tick(RenHdcEngine *engine, int64_t now_us, uint8_t *out_packet10);
++
++RenHdcDualSenseDsp *renhdrum_dualsense_dsp_create(int32_t volume_percent, bool crisp_notes);
++void renhdrum_dualsense_dsp_destroy(RenHdcDualSenseDsp *dsp);
++int32_t renhdrum_dualsense_dsp_set_target(
++    RenHdcDualSenseDsp *dsp,
++    float left_al,
++    float left_fl,
++    float left_ah,
++    float left_fh,
++    float right_al,
++    float right_fl,
++    float right_ah,
++    float right_fh
++);
++int32_t renhdrum_dualsense_dsp_set_half_target(
++    RenHdcDualSenseDsp *dsp,
++    bool is_right,
++    float al,
++    float fl,
++    float ah,
++    float fh
++);
++int32_t renhdrum_dualsense_dsp_fill_f32(
++    RenHdcDualSenseDsp *dsp,
++    float *out_interleaved_4ch,
++    size_t frame_count
++);
++/* DualSense over Bluetooth: one HID output report 0x32 every RENHDRUM_DS5_BT_PERIOD_NS.
++   Report layout from SAxense by egormanga (https://apps.sdore.me/SAxense). */
++#define RENHDRUM_DS5_BT_REPORT_SIZE 142
++#define RENHDRUM_DS5_BT_PERIOD_NS 10666666ULL
++#define RENHDRUM_DS5_BT_BUFFER_LENGTH_DEFAULT 0xFF
++int32_t renhdrum_dualsense_dsp_build_bt_report(
++    RenHdcDualSenseDsp *dsp,
++    uint8_t buffer_length,
++    uint8_t *out_report142
++);
++int32_t renhdrum_dualsense_evaluate_triggers(
++    uint64_t title_id,
++    bool zl_held,
++    bool zr_held,
++    bool rumble_on,
++    int64_t rumble_on_ms,
++    int64_t pulse_age_ms,
++    uint8_t *out_ds5_effects47
++);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* RENHDRUM_H */
+diff --git a/src/common/settings.h b/src/common/settings.h
+index e5f5029dc9..374a8f986f 100644
+--- a/src/common/settings.h
++++ b/src/common/settings.h
+@@ -817,6 +817,35 @@ struct Values {
+     SwitchableSetting<bool> enable_accurate_vibrations{linkage, false, "enable_accurate_vibrations",
+                                                        Category::Controls};
+ 
++    // RenHDrum HD Rumble (Switch Pro Controller / Joy-Con) and DualSense haptics. Defaults are
++    // Ryuhdr 0.2.6's recommended mode. Read by the SDL driver on every vibration, so a change in
++    // the HD Rumble dialog applies to connected controllers right away.
++    Setting<bool> hd_rumble_enabled{linkage, true, "hd_rumble_enabled", Category::Controls};
++    // Amplitude gain in percent for everything RenHDrum plays. Switchable: some Switch 2 games
++    // (Ocarina of Time) send amplitudes below 0.1 that the Joy-Con 2 still plays strongly.
++    SwitchableSetting<int> hd_rumble_gain{linkage, 100, "hd_rumble_gain", Category::Controls};
++    // 0-100: lifts weak vibrations more than strong ones (power curve after the gain).
++    SwitchableSetting<int> hd_rumble_low_boost{linkage, 0, "hd_rumble_low_boost",
++                                               Category::Controls};
++    Setting<int> hd_rumble_usb_interval_ms{linkage, 15, "hd_rumble_usb_interval_ms", Category::Controls};
++    Setting<bool> hd_rumble_envelope_5ms{linkage, true, "hd_rumble_envelope_5ms",
++                                         Category::Controls};
++    Setting<bool> hd_rumble_frequency_in_packet{linkage, true, "hd_rumble_frequency_in_packet",
++                                                Category::Controls};
++    Setting<bool> hd_rumble_crisp_notes{linkage, true, "hd_rumble_crisp_notes",
++                                        Category::Controls};
++    Setting<int> hd_rumble_bluetooth_level{linkage, 3, "hd_rumble_bluetooth_level", Category::Controls};
++    Setting<bool> hd_rumble_bt_after_input{linkage, true, "hd_rumble_bt_after_input",
++                                           Category::Controls};
++    Setting<bool> hd_rumble_bt_fast{linkage, true, "hd_rumble_bt_fast", Category::Controls};
++    Setting<bool> hd_rumble_bt_crisp_notes{linkage, true, "hd_rumble_bt_crisp_notes",
++                                           Category::Controls};
++    Setting<bool> dualsense_haptics_enabled{linkage, true, "dualsense_haptics_enabled",
++                                            Category::Controls};
++    Setting<int> dualsense_haptics_volume{linkage, 100, "dualsense_haptics_volume", Category::Controls};
++    Setting<bool> dualsense_crisp_notes{linkage, true, "dualsense_crisp_notes",
++                                        Category::Controls};
++
+     SwitchableSetting<bool> motion_enabled{linkage, true, "motion_enabled", Category::Controls};
+     Setting<std::string> udp_input_servers{linkage, "127.0.0.1:26760", "udp_input_servers",
+                                            Category::Controls};
 diff --git a/src/hid_core/frontend/emulated_controller.cpp b/src/hid_core/frontend/emulated_controller.cpp
-index 69d5911ec2..20e401644b 100644
+index 69d5911ec2..acea7003ca 100644
 --- a/src/hid_core/frontend/emulated_controller.cpp
 +++ b/src/hid_core/frontend/emulated_controller.cpp
-@@ -193,6 +193,8 @@ void EmulatedController::LoadDevices() {
+@@ -193,6 +193,14 @@ void EmulatedController::LoadDevices() {
      output_params[4] = android_params;
      output_params[LeftIndex].Set("output", true);
      output_params[RightIndex].Set("output", true);
-+    output_params[LeftIndex].Set("pad", 0);
-+    output_params[RightIndex].Set("pad", 1);
++    // Which side a vibration is for, for the SDL driver (RenHDrum plays the sides apart). Other
++    // engines keep their "pad": the native Joy-Con driver stores the controller type in it.
++    if (output_params[LeftIndex].Get("engine", "") == "sdl") {
++        output_params[LeftIndex].Set("pad", 0);
++    }
++    if (output_params[RightIndex].Get("engine", "") == "sdl") {
++        output_params[RightIndex].Set("pad", 1);
++    }
      output_params[2].Set("output", true);
      output_params[3].Set("output", true);
      output_params[4].Set("output", true);
-@@ -1259,18 +1261,12 @@ bool EmulatedController::SetVibration(DeviceIndex device_index, const VibrationV
-     }
- 
-     if (!Settings::values.enable_accurate_vibrations.GetValue()) {
--        using std::chrono::duration_cast;
--        using std::chrono::milliseconds;
-         using std::chrono::steady_clock;
- 
-         const auto now = steady_clock::now();
- 
--        // Filter out non-zero vibrations that are within 15ms of each other.
--        if ((vibration.low_amplitude != 0.0f || vibration.high_amplitude != 0.0f) &&
--            duration_cast<milliseconds>(now - last_vibration_timepoint[index]) < milliseconds(15)) {
--            return false;
--        }
--
-+        // RenHDrum manages stateful pacing, click pulses, and token bucket.
-+        // Do not drop short pulse vibrations (<= 20 ms) here so they reach RenHDrum.
-         last_vibration_timepoint[index] = now;
-     }
- 
 diff --git a/src/input_common/CMakeLists.txt b/src/input_common/CMakeLists.txt
-index 840602f4ce..cc8cf17fa6 100644
+index 840602f4ce..4c7f5efc39 100644
 --- a/src/input_common/CMakeLists.txt
 +++ b/src/input_common/CMakeLists.txt
-@@ -94,3 +94,11 @@ endif()
+@@ -57,6 +57,8 @@ else()
+     target_sources(input_common PRIVATE
+         drivers/joycon.cpp
+         drivers/joycon.h
++        drivers/renhdrum_pad.cpp
++        drivers/renhdrum_pad.h
+         drivers/sdl_driver.cpp
+         drivers/sdl_driver.h
+         helpers/joycon_driver.cpp
+@@ -94,3 +96,11 @@ endif()
  
  create_target_directory_groups(input_common)
  target_link_libraries(input_common PUBLIC hid_core PRIVATE common Boost::headers)
 +
-+# RenHDrum HD Rumble & DualSense engine integration
-+set(RENHDRUM_DIR "${CMAKE_SOURCE_DIR}/../RenHDrum" CACHE PATH "RenHDrum checkout (include/ and target/release/)")
-+if (NOT EXISTS "${RENHDRUM_DIR}/target/release/renhdrum.dll.lib")
-+    message(FATAL_ERROR "RenHDrum is not built: run 'cargo build --release' in ${RENHDRUM_DIR}")
++if (ENABLE_RENHDRUM AND NOT ANDROID)
++    target_compile_definitions(input_common PRIVATE ENABLE_RENHDRUM)
++    target_include_directories(input_common PRIVATE ${PROJECT_SOURCE_DIR}/externals/renhdrum)
++    if (RENHDRUM_SDL_PATCHES)
++        target_compile_definitions(input_common PRIVATE RENHDRUM_SDL_HDRUMBLE)
++    endif()
 +endif()
-+target_include_directories(input_common PUBLIC "${RENHDRUM_DIR}/include")
-+target_link_libraries(input_common PRIVATE "${RENHDRUM_DIR}/target/release/renhdrum.dll.lib")
-diff --git a/src/input_common/drivers/sdl_driver.cpp b/src/input_common/drivers/sdl_driver.cpp
-index a308554071..3cdee5cba8 100644
---- a/src/input_common/drivers/sdl_driver.cpp
-+++ b/src/input_common/drivers/sdl_driver.cpp
-@@ -5,7 +5,10 @@
- 
- #include <algorithm>
- #include <array>
-+#include <chrono>
+diff --git a/src/input_common/drivers/renhdrum_pad.cpp b/src/input_common/drivers/renhdrum_pad.cpp
+new file mode 100644
+index 0000000000..63560e60b2
+--- /dev/null
++++ b/src/input_common/drivers/renhdrum_pad.cpp
+@@ -0,0 +1,639 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "input_common/drivers/renhdrum_pad.h"
++
++#ifdef ENABLE_RENHDRUM
++
++#include <algorithm>
++#include <array>
++#include <cmath>
 +#include <cstring>
- #include <numbers>
 +#include <string>
- #include "common/logging.h"
- #include "common/math_util.h"
- #include "common/param_package.h"
-@@ -14,6 +17,14 @@
- #include "common/vector_math.h"
- #include "input_common/drivers/sdl_driver.h"
- 
-+// HD Rumble modes added by .patch/sdl3/0002-hdrumble-idle-write.patch (port of Ryuhdr's SDL2 patch; SDL3 is linked
-+// statically). Each returns 1 when the mode is active, 0 when SDL refused it, -1 for a pad that is not a HIDAPI Switch pad.
++
++#include <renhdrum.h>
++
++#include "common/dynamic_library.h"
++#include "common/logging.h"
++#include "common/settings.h"
++
++#ifdef RENHDRUM_SDL_HDRUMBLE
++// Added by .patch/sdl3-hdrumble/0002-hdrumble-idle-write.patch (SDL3 is linked statically). Each
++// returns 1 when the mode is active, 0 when SDL refused it, -1 for a pad that is not a HIDAPI
++// Switch pad.
 +extern "C" {
 +int SDLCALL SDL_HDRumbleSetNoQueue(SDL_Joystick* joystick, int enable, int gap_ms, int pause_ms);
 +int SDLCALL SDL_HDRumbleSetNoQueueBluetooth(SDL_Joystick* joystick, int enable, int gap_ms);
 +int SDLCALL SDL_HDRumbleSetBluetoothAfterInput(SDL_Joystick* joystick, int enable);
 +}
++#endif
 +
- namespace InputCommon {
- 
- namespace {
-@@ -92,6 +103,13 @@ public:
-                 : guid{guid_}, port{port_}, sdl_joystick{joystick, &SDL_CloseJoystick},
-                     sdl_controller{game_controller, &SDL_CloseGamepad} {
-         EnableMotion();
-+        if (sdl_joystick) {
-+            InitRenHDrum();
++namespace InputCommon {
++
++namespace {
++
++// The RenHDrum C ABI, resolved from the shared library at runtime: nothing to link, and a build
++// without the library just keeps the standard rumble.
++struct RenHDrumApi {
++    decltype(&renhdrum_engine_create) engine_create{};
++    decltype(&renhdrum_engine_destroy) engine_destroy{};
++    decltype(&renhdrum_engine_apply_settings) engine_apply_settings{};
++    decltype(&renhdrum_engine_push_half_sample) engine_push_half_sample{};
++    decltype(&renhdrum_engine_tick) engine_tick{};
++    decltype(&renhdrum_settings_resolve) settings_resolve{};
++    decltype(&renhdrum_dualsense_dsp_create) dsp_create{};
++    decltype(&renhdrum_dualsense_dsp_destroy) dsp_destroy{};
++    decltype(&renhdrum_dualsense_dsp_set_half_target) dsp_set_half_target{};
++    decltype(&renhdrum_dualsense_dsp_fill_f32) dsp_fill_f32{};
++
++    Common::DynamicLibrary library;
++    bool loaded{};
++};
++
++const RenHDrumApi& Api() {
++    static const RenHDrumApi api = [] {
++        RenHDrumApi a;
++#if defined(_WIN32)
++        constexpr const char* name = "renhdrum.dll";
++#elif defined(__APPLE__)
++        constexpr const char* name = "librenhdrum.dylib";
++#else
++        constexpr const char* name = "librenhdrum.so";
++#endif
++        a.library = Common::DynamicLibrary(name);
++        if (!a.library.IsOpen()) {
++            LOG_INFO(Input, "RenHDrum: {} not found, using the standard rumble", name);
++            return a;
 +        }
++        a.loaded = a.library.GetSymbol("renhdrum_engine_create", &a.engine_create) &&
++                   a.library.GetSymbol("renhdrum_engine_destroy", &a.engine_destroy) &&
++                   a.library.GetSymbol("renhdrum_engine_apply_settings", &a.engine_apply_settings) &&
++                   a.library.GetSymbol("renhdrum_engine_push_half_sample",
++                                       &a.engine_push_half_sample) &&
++                   a.library.GetSymbol("renhdrum_engine_tick", &a.engine_tick) &&
++                   a.library.GetSymbol("renhdrum_settings_resolve", &a.settings_resolve) &&
++                   a.library.GetSymbol("renhdrum_dualsense_dsp_create", &a.dsp_create) &&
++                   a.library.GetSymbol("renhdrum_dualsense_dsp_destroy", &a.dsp_destroy) &&
++                   a.library.GetSymbol("renhdrum_dualsense_dsp_set_half_target",
++                                       &a.dsp_set_half_target) &&
++                   a.library.GetSymbol("renhdrum_dualsense_dsp_fill_f32", &a.dsp_fill_f32);
++        if (a.loaded) {
++            LOG_INFO(Input, "RenHDrum: loaded {}", name);
++        } else {
++            LOG_WARNING(Input, "RenHDrum: {} is missing functions, using the standard rumble", name);
++        }
++        return a;
++    }();
++    return api;
++}
++
++constexpr Uint16 NintendoVendorId = 0x057E;
++constexpr Uint16 SonyVendorId = 0x054C;
++constexpr std::array<Uint8, 10> NeutralPacket{0x10, 0, 0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40};
++constexpr int DualSenseAudioMaxAttempts = 10;
++// SDL no-queue gap while the 5 ms envelope runs (Ryuhdr AmFmNoQueueGapMs)
++[[maybe_unused]] constexpr int NoQueueEnvelopeGapMs = 10;
++
++bool IsSwitchHdController(Uint16 vid, Uint16 pid) {
++    return vid == NintendoVendorId && (pid == 0x2009 || pid == 0x2006 || pid == 0x2007);
++}
++
++bool IsDualSense(Uint16 vid, Uint16 pid) {
++    return vid == SonyVendorId && (pid == 0x0CE6 || pid == 0x0DF2);
++}
++
++struct UserSettings {
++    bool hd_enabled{true};
++    int usb_interval_ms{15};
++    bool envelope_5ms{true};
++    bool frequency_in_packet{true};
++    bool crisp_notes{true};
++    int bluetooth_level{3};
++    bool bt_after_input{true};
++    bool bt_fast{true};
++    bool bt_crisp_notes{true};
++    bool dualsense_enabled{true};
++    int dualsense_volume{100};
++    bool dualsense_crisp_notes{true};
++    int gain{100};
++    int low_boost{0};
++    bool operator==(const UserSettings&) const = default;
++};
++
++UserSettings ReadUserSettings() {
++    const auto& s = Settings::values;
++    return {
++        .hd_enabled = s.hd_rumble_enabled.GetValue(),
++        .usb_interval_ms = std::clamp(s.hd_rumble_usb_interval_ms.GetValue(), 5, 100),
++        .envelope_5ms = s.hd_rumble_envelope_5ms.GetValue(),
++        .frequency_in_packet = s.hd_rumble_frequency_in_packet.GetValue(),
++        .crisp_notes = s.hd_rumble_crisp_notes.GetValue(),
++        .bluetooth_level = std::clamp(s.hd_rumble_bluetooth_level.GetValue(), 1, 3),
++        .bt_after_input = s.hd_rumble_bt_after_input.GetValue(),
++        .bt_fast = s.hd_rumble_bt_fast.GetValue(),
++        .bt_crisp_notes = s.hd_rumble_bt_crisp_notes.GetValue(),
++        .dualsense_enabled = s.dualsense_haptics_enabled.GetValue(),
++        .dualsense_volume = std::clamp(s.dualsense_haptics_volume.GetValue(), 0, 100),
++        .dualsense_crisp_notes = s.dualsense_crisp_notes.GetValue(),
++        .gain = std::clamp(s.hd_rumble_gain.GetValue(), 25, 1000),
++        .low_boost = std::clamp(s.hd_rumble_low_boost.GetValue(), 0, 100),
++    };
++}
++
++// Gain, then a power curve that lifts weak vibrations more than strong ones (exponent 1.0 at
++// boost 0 down to 0.4 at boost 100). Below a small knee the curve turns quadratic, so the
++// near-silent values games send between hits do not become a constant buzz.
++float ShapeAmplitude(float amplitude, const UserSettings& u) {
++    const float x = (std::min)(amplitude * static_cast<float>(u.gain) / 100.0f, 1.0f);
++    if (x <= 0.0f || u.low_boost <= 0) {
++        return x;
 +    }
-+
-+    ~SDLJoystick() {
-+        CleanupRenHDrum();
-     }
- 
-     void EnableMotion() {
-@@ -233,6 +251,10 @@ public:
-     }
- 
-     bool HasHDRumble() const {
-+        if (renhdrum_engine || (dualsense_dsp && ds_audio_stream)) {
-+            return true;
-+        }
-+
-         constexpr Uint16 valve_vendor_id = 0x28DE;
-         const auto is_known_hd_type = [](SDL_GamepadType type) {
-             return type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO ||
-@@ -306,8 +328,13 @@ public:
-     }
- 
-     void SetSDLJoystick(SDL_Joystick* joystick, SDL_Gamepad* controller) {
-+        std::scoped_lock lock{renhdrum_mutex};
-+        CleanupRenHDrum();
-         sdl_joystick.reset(joystick);
-         sdl_controller.reset(controller);
-+        if (sdl_joystick) {
-+            InitRenHDrum();
-+        }
-     }
- 
-     bool IsJoyconLeft() const {
-@@ -399,13 +426,297 @@ public:
-         return "Unknown";
-     }
- 
-+    RenHdcEngine* GetRenHDrumEngine() const {
-+        return renhdrum_engine;
++    const float exponent = 1.0f - 0.006f * static_cast<float>(u.low_boost);
++    constexpr float knee = 0.02f;
++    if (x < knee) {
++        const float r = x / knee;
++        return std::pow(knee, exponent) * r * r;
 +    }
++    return std::pow(x, exponent);
++}
 +
-+    RenHdcDualSenseDsp* GetDualSenseDsp() const {
-+        return dualsense_dsp;
-+    }
++} // namespace
 +
-+    bool HasDualSenseAudio() const {
-+        return ds_audio_stream != nullptr;
-+    }
++// Lock rule: `mutex` is never held while calling an SDL function that takes the SDL joystick lock
++// (SDL_SendJoystickEffect, SDL_HDRumbleSet*, SDL_GetJoystickConnectionState, SDL_Rumble*). SDL
++// runs the joystick-removed event watcher under that lock, and Shutdown() takes `mutex` from
++// there. The joystick pointer is copied out and used after unlocking: SDL3 validates joystick
++// handles, so a call on one closed meanwhile only fails.
++struct RenHDrumPad::Impl {
++    bool is_bluetooth{};
 +
-+    void TickRenHDrum(int64_t now_us) {
-+        uint8_t packet[10];
-+        SDL_Joystick* joystick = nullptr;
-+        {
-+            std::scoped_lock lock{renhdrum_mutex};
-+            if (!renhdrum_engine || !sdl_joystick ||
-+                renhdrum_engine_tick(renhdrum_engine, now_us, packet) != 1) {
-+                return;
-+            }
-+            joystick = sdl_joystick.get();
-+        }
-+        SDL_SendJoystickEffect(joystick, packet, sizeof(packet));
-+    }
++    mutable std::mutex mutex;
++    SDL_Joystick* joystick{};
++    SDL_Gamepad* gamepad{};
++    RenHdcEngine* engine{};
++    RenHdcDualSenseDsp* dsp{};
++    SDL_AudioStream* audio_stream{};
++    bool audio_inited{};
++    bool audio_opening{};
++    int audio_attempts{};
++    std::int64_t audio_next_us{};
++    UserSettings user{};
 +
-+    // Called on the HLE thread. Returns true when RenHDrum took the vibration (Switch HD engine, or
-+    // DualSense haptics audio running); false = use the standard rumble below.
-+    bool RenHDrumVibrate(int64_t now_us, bool is_right, const Common::Input::VibrationStatus& v) {
-+        {
-+            std::scoped_lock lock{renhdrum_mutex};
-+            if (!renhdrum_engine) {
-+                if (!dualsense_dsp) {
-+                    return false;
-+                }
-+                renhdrum_dualsense_dsp_set_half_target(dualsense_dsp, is_right, v.low_amplitude,
-+                                                       v.low_frequency, v.high_amplitude,
-+                                                       v.high_frequency);
-+                return ds_audio_stream != nullptr;
-+            }
-+            renhdrum_engine_push_half_sample(renhdrum_engine, now_us, is_right, v.low_amplitude,
-+                                             v.low_frequency, v.high_amplitude, v.high_frequency);
-+        }
-+        TickRenHDrum(now_us);
-+        return true;
-+    }
-+
-+    void MaintainDualSenseAudio(int64_t now_us) {
-+        std::scoped_lock lock{renhdrum_mutex};
-+        if (!dualsense_dsp || ds_audio_stream || ds_audio_attempts >= DS_AUDIO_MAX_ATTEMPTS ||
-+            now_us < ds_audio_next_us) {
-+            return;
-+        }
-+        ds_audio_next_us = now_us + 2'000'000;
-+        TryOpenDualSenseAudio();
-+    }
-+
- private:
-+    void InitRenHDrum() {
-+        if (!sdl_joystick) {
-+            return;
-+        }
-+
-+        const Uint16 vid = SDL_GetJoystickVendor(sdl_joystick.get());
-+        const Uint16 pid = SDL_GetJoystickProduct(sdl_joystick.get());
-+
-+        // Nintendo Switch controllers (VID 0x057E)
-+        if (vid == 0x057E) {
-+            if (pid == 0x2009 || pid == 0x2006 || pid == 0x2007) {
-+                const bool is_bluetooth =
-+                    (SDL_GetJoystickConnectionState(sdl_joystick.get()) == SDL_JOYSTICK_CONNECTION_WIRELESS);
-+                const bool is_pro = (pid == 0x2009);
-+                renhdrum_engine = renhdrum_engine_create(is_bluetooth, is_pro);
-+                if (renhdrum_engine) {
-+                    LOG_INFO(Input, "Initialized RenHDrum engine for Switch controller {:04X}:{:04X} (BT: {})",
-+                             vid, pid, is_bluetooth);
-+                    ApplyRenHDrumSettings(is_bluetooth);
-+                }
-+            }
-+        }
-+        // Sony DualSense (VID 0x054C, PID 0x0CE6 or 0x0DF2)
-+        else if (vid == 0x054C && (pid == 0x0CE6 || pid == 0x0DF2)) {
-+            dualsense_dsp = renhdrum_dualsense_dsp_create(100, true);
-+            if (dualsense_dsp) {
-+                LOG_INFO(Input, "Initialized RenHDrum DualSense DSP for controller {:04X}:{:04X}", vid, pid);
-+                TryOpenDualSenseAudio();
-+            }
-+        }
-+    }
-+
-+    // Ryuhdr's recommended mode for a configured pad (0.2.6): wired 15 ms + cards 1 / 3 / 5 / 7 / 8, Bluetooth level 3 +
-+    // B1 / B3 / B2. Flag files next to eden.exe still win (renhdrum_settings_resolve). Then the SDL modes are switched on; a mode
-+    // SDL refused is cleared, so the engine never paces for writes that SDL does not gate (Ryuhdr: _noQueueActive / _btFastActive).
-+    void ApplyRenHDrumSettings(bool is_bluetooth) {
++    /// Engine settings from the user's choices (Ryuhdr 0.2.6's recommended mode by default).
++    /// Caller holds the mutex.
++    bool ResolveEngineSettings(RenHdcSettings& settings) const {
 +        RenHdcConfig config{};
-+        config.enable_hd_rumble = true;
-+        config.hd_rumble_usb_interval_ms = 15;
-+        config.hd_rumble_bluetooth_level = 3;
++        config.enable_hd_rumble = user.hd_enabled;
++        config.hd_rumble_usb_interval_ms = user.usb_interval_ms;
++        config.hd_rumble_bluetooth_level = user.bluetooth_level;
 +        config.hd_rumble_usb_auto_slow = true;
 +        config.hd_rumble_experimental_usb_no_queue = true;
-+        config.hd_rumble_experimental_envelope_5ms = true;
-+        config.hd_rumble_experimental_frequency_in_packet = true;
-+        config.hd_rumble_experimental_frequency_both_bands = true;
-+        config.hd_rumble_experimental_crisp_notes = true;
-+        config.hd_rumble_experimental_bt_after_input = true;
-+        config.hd_rumble_experimental_bt_fast = true;
-+        config.hd_rumble_experimental_bt_crisp_notes = true;
-+
-+        RenHdcSettings settings{};
-+        if (renhdrum_settings_resolve(&config, &settings) != RENHDRUM_OK) {
-+            return;
-+        }
-+
-+        SDL_Joystick* joystick = sdl_joystick.get();
-+        if (is_bluetooth) {
-+            // Card B3 needs B1 on (Ryuhdr HdApplyBtFast); SDL never runs both on one pad, B3 wins
-+            settings.bt_fast = settings.enabled && settings.bt_fast && settings.bt_after_input &&
-+                               SDL_HDRumbleSetNoQueueBluetooth(joystick, 1, HD_NO_QUEUE_ENVELOPE_GAP_MS) == 1;
-+            settings.bt_after_input = settings.enabled && settings.bt_after_input && !settings.bt_fast &&
-+                                      SDL_HDRumbleSetBluetoothAfterInput(joystick, 1) == 1;
-+            settings.usb_no_queue = false;
-+            LOG_INFO(Input, "RenHDrum HD Rumble Bluetooth: level {}, {}{}", settings.bluetooth_level,
-+                     settings.bt_fast          ? "card B3 (5 ms envelope, written while SDL is idle)"
-+                     : settings.bt_after_input ? "card B1 (written right after an input report)"
-+                                               : "clock based writes",
-+                     settings.enabled && settings.bt_crisp_notes ? ", card B2 crisp notes" : "");
-+        } else {
-+            // Card 3 sends one packet per 15 ms window itself: a smaller SDL gap (Ryuhdr HdApplyNoQueue)
-+            const int gap_ms =
-+                settings.envelope_5ms ? HD_NO_QUEUE_ENVELOPE_GAP_MS : settings.usb_interval_ms;
-+            settings.usb_no_queue = settings.enabled && settings.usb_no_queue &&
-+                                    SDL_HDRumbleSetNoQueue(joystick, 1, gap_ms, settings.usb_pause_ms) == 1;
-+            settings.bt_after_input = false;
-+            settings.bt_fast = false;
-+            const bool envelope = settings.usb_no_queue && settings.envelope_5ms;
-+            LOG_INFO(Input, "RenHDrum HD Rumble wired: {} ms, {}{}{}{}", settings.usb_interval_ms,
-+                     settings.usb_no_queue ? "no-queue (written while SDL is idle)" : "queued writes",
-+                     envelope ? ", card 3 5 ms envelope" : "",
-+                     envelope && settings.frequency_in_packet && settings.frequency_both_bands ? ", cards 5 + 7" : "",
-+                     envelope && settings.crisp_notes ? ", card 8 crisp notes" : "");
-+        }
-+        renhdrum_engine_apply_settings(renhdrum_engine, &settings);
++        config.hd_rumble_experimental_envelope_5ms = user.envelope_5ms;
++        config.hd_rumble_experimental_frequency_in_packet = user.frequency_in_packet;
++        config.hd_rumble_experimental_frequency_both_bands = user.frequency_in_packet;
++        config.hd_rumble_experimental_crisp_notes = user.crisp_notes;
++        config.hd_rumble_experimental_bt_after_input = user.bt_after_input;
++        config.hd_rumble_experimental_bt_fast = user.bt_fast;
++        config.hd_rumble_experimental_bt_crisp_notes = user.bt_crisp_notes;
++        return Api().settings_resolve(&config, &settings) == RENHDRUM_OK;
 +    }
 +
-+    void TryOpenDualSenseAudio() {
-+        if (!dualsense_dsp || !sdl_joystick || ds_audio_stream) {
-+            return;
++    /// Switches SDL's HD Rumble transport modes to match `settings`, then clears the modes SDL
++    /// refused, so the engine never paces for writes SDL does not gate. Called without the mutex.
++    void ApplyTransportModes(SDL_Joystick* js, RenHdcSettings& settings) const {
++#ifdef RENHDRUM_SDL_HDRUMBLE
++        SDL_HDRumbleSetNoQueue(js, 0, 0, 0);
++        SDL_HDRumbleSetNoQueueBluetooth(js, 0, 0);
++        SDL_HDRumbleSetBluetoothAfterInput(js, 0);
++        if (is_bluetooth) {
++            // B3 needs B1 on; SDL never runs both on one pad, B3 wins
++            settings.bt_fast = settings.enabled && settings.bt_fast && settings.bt_after_input &&
++                               SDL_HDRumbleSetNoQueueBluetooth(js, 1, NoQueueEnvelopeGapMs) == 1;
++            settings.bt_after_input = settings.enabled && settings.bt_after_input &&
++                                      !settings.bt_fast &&
++                                      SDL_HDRumbleSetBluetoothAfterInput(js, 1) == 1;
++            settings.usb_no_queue = false;
++        } else {
++            const int gap_ms =
++                settings.envelope_5ms ? NoQueueEnvelopeGapMs : settings.usb_interval_ms;
++            settings.usb_no_queue =
++                settings.enabled && settings.usb_no_queue &&
++                SDL_HDRumbleSetNoQueue(js, 1, gap_ms, settings.usb_pause_ms) == 1;
++            settings.bt_after_input = false;
++            settings.bt_fast = false;
 +        }
-+        ++ds_audio_attempts;
-+        if (SDL_GetJoystickConnectionState(sdl_joystick.get()) == SDL_JOYSTICK_CONNECTION_WIRELESS) {
-+            ds_audio_attempts = DS_AUDIO_MAX_ATTEMPTS;
-+            LOG_INFO(Input, "DualSense on Bluetooth: haptics audio unavailable, using standard rumble");
-+            return;
-+        }
-+        if (!SDL_WasInit(SDL_INIT_AUDIO)) {
-+            if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-+                LOG_WARNING(Input, "DualSense haptics: SDL audio init failed: {}", SDL_GetError());
++#else
++        // Stock SDL queues every write; the engine paces by its clock.
++        (void)js;
++        settings.usb_no_queue = false;
++        settings.bt_after_input = false;
++        settings.bt_fast = false;
++#endif
++    }
++
++    /// Resolves the settings, switches the SDL modes and hands the result to the engine.
++    /// Called without the mutex.
++    void ConfigureEngine() {
++        RenHdcSettings settings{};
++        SDL_Joystick* js = nullptr;
++        {
++            std::scoped_lock lock{mutex};
++            if (!engine || !joystick || !ResolveEngineSettings(settings)) {
 +                return;
 +            }
-+            ds_audio_inited = true;
++            js = joystick;
 +        }
++        ApplyTransportModes(js, settings);
++        {
++            std::scoped_lock lock{mutex};
++            if (!engine) {
++                return;
++            }
++            Api().engine_apply_settings(engine, &settings);
++        }
++        if (is_bluetooth) {
++            LOG_INFO(Input, "RenHDrum HD Rumble Bluetooth: level {}, {}{}", settings.bluetooth_level,
++                     settings.bt_fast          ? "5 ms envelope while SDL is idle"
++                     : settings.bt_after_input ? "written right after an input report"
++                                               : "clock based writes",
++                     settings.enabled && settings.bt_crisp_notes ? ", crisp notes" : "");
++        } else {
++            const bool envelope = settings.usb_no_queue && settings.envelope_5ms;
++            LOG_INFO(Input, "RenHDrum HD Rumble wired: {} ms, {}{}{}", settings.usb_interval_ms,
++                     settings.usb_no_queue ? "no-queue writes" : "queued writes",
++                     envelope ? ", 5 ms envelope" : "",
++                     envelope && settings.crisp_notes ? ", crisp notes" : "");
++        }
++    }
 +
-+        int dev_count = 0;
-+        SDL_AudioDeviceID* devices = SDL_GetAudioPlaybackDevices(&dev_count);
-+        SDL_AudioDeviceID matched_dev = 0;
-+        std::string seen;
-+        for (int i = 0; devices && i < dev_count; ++i) {
++    struct SettingsChange {
++        bool reconfigure_engine{};
++        bool stop_engine{};
++    };
++
++    /// Picks up changes made in the HD Rumble dialog. Caller holds the mutex; the returned SDL
++    /// work is done after unlocking.
++    SettingsChange RefreshUserSettings() {
++        const UserSettings now = ReadUserSettings();
++        if (now == user) {
++            return {};
++        }
++        const UserSettings old = user;
++        user = now;
++        if (dsp && (old.dualsense_volume != now.dualsense_volume ||
++                    old.dualsense_crisp_notes != now.dualsense_crisp_notes)) {
++            // The audio callback runs with the stream locked, so it never sees a freed DSP. The
++            // audio stream lock is not the joystick lock, and the callback never takes `mutex`.
++            if (audio_stream) {
++                SDL_LockAudioStream(audio_stream);
++            }
++            const auto& api = Api();
++            api.dsp_destroy(dsp);
++            dsp = api.dsp_create(now.dualsense_volume, now.dualsense_crisp_notes);
++            if (audio_stream) {
++                SDL_UnlockAudioStream(audio_stream);
++            }
++        }
++        return {
++            .reconfigure_engine = engine != nullptr,
++            .stop_engine = engine != nullptr && old.hd_enabled && !now.hd_enabled,
++        };
++    }
++
++    /// The DualSense exposes its voice coils as a 4-channel USB audio device that Windows may
++    /// list a moment after the HID device, hence the retries. Called without the mutex.
++    void OpenDualSenseAudio() {
++        SDL_Joystick* js = nullptr;
++        SDL_Gamepad* gp = nullptr;
++        {
++            std::scoped_lock lock{mutex};
++            if (!dsp || !joystick || audio_stream || audio_opening) {
++                return;
++            }
++            audio_opening = true;
++            ++audio_attempts;
++            js = joystick;
++            gp = gamepad;
++        }
++        // SDL counts subsystem references: every pad with a stream holds one, so one pad going
++        // away does not stop another's audio.
++        SDL_AudioStream* stream = nullptr;
++        const bool inited = SDL_InitSubSystem(SDL_INIT_AUDIO);
++        if (inited) {
++            stream = OpenDualSenseAudioStream(js);
++        } else {
++            LOG_WARNING(Input, "RenHDrum: SDL audio init failed: {}", SDL_GetError());
++        }
++        bool opened = false;
++        {
++            std::scoped_lock lock{mutex};
++            audio_opening = false;
++            if (stream && joystick && dsp && !audio_stream) {
++                audio_stream = stream;
++                audio_inited = true;
++                opened = true;
++            }
++        }
++        if (!opened) {
++            // No device yet, or shut down while opening
++            if (stream) {
++                SDL_DestroyAudioStream(stream);
++            }
++            if (inited) {
++                SDL_QuitSubSystem(SDL_INIT_AUDIO);
++            }
++        }
++        if (opened) {
++            // Stop SDL's HID rumble once so the pad plays the audio haptics
++            if (gp) {
++                SDL_RumbleGamepad(gp, 0, 0, 0);
++            } else {
++                SDL_RumbleJoystick(js, 0, 0, 0);
++            }
++        }
++    }
++
++    /// Finds the DualSense audio device and opens a playing stream on it, or nullptr. Called
++    /// without the mutex, with the SDL audio subsystem initialized.
++    SDL_AudioStream* OpenDualSenseAudioStream(SDL_Joystick* js) {
++        if (SDL_GetJoystickConnectionState(js) == SDL_JOYSTICK_CONNECTION_WIRELESS) {
++            std::scoped_lock lock{mutex};
++            audio_attempts = DualSenseAudioMaxAttempts;
++            LOG_INFO(Input, "RenHDrum: DualSense on Bluetooth, using the standard rumble");
++            return nullptr;
++        }
++        int count = 0;
++        SDL_AudioDeviceID* devices = SDL_GetAudioPlaybackDevices(&count);
++        SDL_AudioDeviceID matched = 0;
++        for (int i = 0; devices && i < count; ++i) {
 +            const char* name = SDL_GetAudioDeviceName(devices[i]);
-+            SDL_AudioSpec dev_spec{};
++            SDL_AudioSpec spec{};
 +            const int channels =
-+                SDL_GetAudioDeviceFormat(devices[i], &dev_spec, nullptr) ? dev_spec.channels : 0;
-+            seen += std::string("\"") + (name ? name : "?") + "\" (" + std::to_string(channels) + " ch); ";
++                SDL_GetAudioDeviceFormat(devices[i], &spec, nullptr) ? spec.channels : 0;
 +            if (name && channels >= 4 &&
 +                (std::strstr(name, "DualSense") != nullptr ||
 +                 std::strstr(name, "Wireless Controller") != nullptr)) {
-+                matched_dev = devices[i];
++                matched = devices[i];
 +                break;
 +            }
 +        }
 +        SDL_free(devices);
-+
-+        if (matched_dev == 0) {
-+            LOG_WARNING(Input, "DualSense haptics: no 4-channel DualSense audio device yet (attempt {}): {}",
-+                        ds_audio_attempts, seen);
-+            return;
++        if (matched == 0) {
++            LOG_DEBUG(Input, "RenHDrum: no DualSense audio device yet");
++            return nullptr;
 +        }
 +
 +        const SDL_AudioSpec spec{
@@ -906,131 +1451,435 @@ index a308554071..3cdee5cba8 100644
 +            .channels = 4,
 +            .freq = 48000,
 +        };
-+        ds_audio_stream =
-+            SDL_OpenAudioDeviceStream(matched_dev, &spec, &SDLJoystick::DualSenseAudioCallback, this);
-+        if (!ds_audio_stream) {
-+            LOG_WARNING(Input, "DualSense haptics: could not open audio device: {}", SDL_GetError());
-+            return;
++        SDL_AudioStream* stream = SDL_OpenAudioDeviceStream(matched, &spec, &AudioCallback, this);
++        if (!stream) {
++            LOG_WARNING(Input, "RenHDrum: could not open the DualSense audio device: {}",
++                        SDL_GetError());
++            return nullptr;
 +        }
-+        SDL_ResumeAudioStreamDevice(ds_audio_stream);
-+
-+        // Stop SDL's HID rumble once so the pad plays the audio haptics (Ryuhdr: _hapticsStopSdlRumble).
-+        if (sdl_controller) {
-+            SDL_RumbleGamepad(sdl_controller.get(), 0, 0, 0);
-+        } else {
-+            SDL_RumbleJoystick(sdl_joystick.get(), 0, 0, 0);
-+        }
-+        int device_frames = 0;
-+        SDL_AudioSpec device_spec{};
-+        SDL_GetAudioDeviceFormat(matched_dev, &device_spec, &device_frames);
-+        LOG_INFO(Input, "DualSense haptics audio opened on \"{}\" (attempt {}, device {} ch {} Hz, {} frames per buffer)",
-+                 SDL_GetAudioDeviceName(matched_dev), ds_audio_attempts, device_spec.channels,
-+                 device_spec.freq, device_frames);
++        SDL_ResumeAudioStreamDevice(stream);
++        LOG_INFO(Input, "RenHDrum: DualSense haptics on \"{}\"", SDL_GetAudioDeviceName(matched));
++        return stream;
 +    }
 +
-+    static void DualSenseAudioCallback(void* userdata, SDL_AudioStream* stream, int additional_amount,
-+                                       int total_amount) {
-+        if (additional_amount <= 0 || !userdata) {
++    static void SDLCALL AudioCallback(void* userdata, SDL_AudioStream* stream,
++                                      int additional_amount, int /*total_amount*/) {
++        auto* const self = static_cast<Impl*>(userdata);
++        if (additional_amount <= 0 || !self || !self->dsp) {
 +            return;
 +        }
-+        auto* self = static_cast<SDLJoystick*>(userdata);
-+        if (!self->dualsense_dsp) {
-+            return;
-+        }
-+
-+        constexpr int bytes_per_frame = 4 * static_cast<int>(sizeof(float));
-+        int frames_needed = additional_amount / bytes_per_frame;
-+        if (frames_needed <= 0) {
-+            return;
-+        }
-+
-+        constexpr int CHUNK_FRAMES = 256;
-+        float chunk[CHUNK_FRAMES * 4];
-+
-+        while (frames_needed > 0) {
-+            const int cur_frames = (std::min)(frames_needed, CHUNK_FRAMES);
-+            if (renhdrum_dualsense_dsp_fill_f32(self->dualsense_dsp, chunk,
-+                                                static_cast<size_t>(cur_frames)) != RENHDRUM_OK) {
-+                std::memset(chunk, 0, sizeof(chunk)); // never send stack garbage to the actuators
++        constexpr int frame_bytes = 4 * static_cast<int>(sizeof(float));
++        constexpr int chunk_frames = 256;
++        std::array<float, chunk_frames * 4> chunk{};
++        int frames = additional_amount / frame_bytes;
++        while (frames > 0) {
++            const int count = (std::min)(frames, chunk_frames);
++            if (Api().dsp_fill_f32(self->dsp, chunk.data(), static_cast<size_t>(count)) !=
++                RENHDRUM_OK) {
++                chunk.fill(0.0f); // never send garbage to the actuators
 +            }
-+            SDL_PutAudioStreamData(stream, chunk, cur_frames * bytes_per_frame);
-+            frames_needed -= cur_frames;
++            SDL_PutAudioStreamData(stream, chunk.data(), count * frame_bytes);
++            frames -= count;
 +        }
 +    }
 +
-+    void CleanupRenHDrum() {
-+        if (ds_audio_stream) {
-+            SDL_PauseAudioStreamDevice(ds_audio_stream);
-+            SDL_ClearAudioStream(ds_audio_stream);
-+            SDL_DestroyAudioStream(ds_audio_stream);
-+            ds_audio_stream = nullptr;
++    /// Frees the engine, the DSP and the audio stream. Caller holds the mutex. Returns whether
++    /// an engine was running, so the caller sends the neutral packet after unlocking.
++    bool Release() {
++        const auto& api = Api();
++        if (audio_stream) {
++            // Waits for a running audio callback; the callback never takes `mutex`
++            SDL_DestroyAudioStream(audio_stream);
++            audio_stream = nullptr;
 +        }
-+        if (ds_audio_inited) {
++        if (audio_inited) {
 +            SDL_QuitSubSystem(SDL_INIT_AUDIO);
-+            ds_audio_inited = false;
++            audio_inited = false;
 +        }
-+        ds_audio_attempts = 0;
-+        ds_audio_next_us = 0;
-+        if (renhdrum_engine) {
-+            if (sdl_joystick) {
-+                uint8_t stop_pkt[10] = {0x10, 0, 0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40};
-+                SDL_SendJoystickEffect(sdl_joystick.get(), stop_pkt, sizeof(stop_pkt));
-+            }
-+            renhdrum_engine_destroy(renhdrum_engine);
-+            renhdrum_engine = nullptr;
++        const bool had_engine = engine != nullptr;
++        if (engine) {
++            api.engine_destroy(engine);
++            engine = nullptr;
 +        }
-+        if (dualsense_dsp) {
-+            renhdrum_dualsense_dsp_destroy(dualsense_dsp);
-+            dualsense_dsp = nullptr;
++        if (dsp) {
++            api.dsp_destroy(dsp);
++            dsp = nullptr;
 +        }
++        return had_engine;
++    }
++};
++
++static void SendNeutralPacket(SDL_Joystick* joystick) {
++    SDL_SendJoystickEffect(joystick, NeutralPacket.data(), static_cast<int>(NeutralPacket.size()));
++}
++
++bool IsRenHDrumBuilt() {
++    return true;
++}
++
++bool IsRenHDrumLoaded() {
++    return Api().loaded;
++}
++
++std::shared_ptr<RenHDrumPad> RenHDrumPad::Create(SDL_Joystick* joystick, SDL_Gamepad* gamepad) {
++    if (!joystick || !IsRenHDrumLoaded()) {
++        return nullptr;
++    }
++    const Uint16 vid = SDL_GetJoystickVendor(joystick);
++    const Uint16 pid = SDL_GetJoystickProduct(joystick);
++    const bool switch_pad = IsSwitchHdController(vid, pid);
++    if (!switch_pad && !IsDualSense(vid, pid)) {
++        return nullptr;
 +    }
 +
-     Common::UUID guid;
-     int port;
-     std::unique_ptr<SDL_Joystick, decltype(&SDL_CloseJoystick)> sdl_joystick;
++    // Not shared yet: no other thread can reach `state` until it is returned.
++    const auto& api = Api();
++    auto state = std::make_unique<Impl>();
++    state->joystick = joystick;
++    state->gamepad = gamepad;
++    state->is_bluetooth =
++        SDL_GetJoystickConnectionState(joystick) == SDL_JOYSTICK_CONNECTION_WIRELESS;
++    state->user = ReadUserSettings();
++    if (switch_pad) {
++        state->engine = api.engine_create(state->is_bluetooth, pid == 0x2009);
++        if (!state->engine) {
++            return nullptr;
++        }
++        LOG_INFO(Input, "RenHDrum: HD Rumble for {:04X}:{:04X} (Bluetooth: {})", vid, pid,
++                 state->is_bluetooth);
++        state->ConfigureEngine();
++    } else {
++        state->dsp = api.dsp_create(state->user.dualsense_volume, state->user.dualsense_crisp_notes);
++        if (!state->dsp) {
++            return nullptr;
++        }
++        LOG_INFO(Input, "RenHDrum: DualSense haptics for {:04X}:{:04X}", vid, pid);
++        state->OpenDualSenseAudio();
++    }
++    return std::shared_ptr<RenHDrumPad>(new RenHDrumPad(std::move(state)));
++}
++
++RenHDrumPad::RenHDrumPad(std::unique_ptr<Impl> impl_) : impl{std::move(impl_)} {}
++
++RenHDrumPad::~RenHDrumPad() {
++    Shutdown();
++}
++
++void RenHDrumPad::Shutdown() {
++    SDL_Joystick* joystick = nullptr;
++    bool had_engine = false;
++    {
++        std::scoped_lock lock{impl->mutex};
++        if (!impl->joystick) {
++            return;
++        }
++        joystick = impl->joystick;
++        had_engine = impl->Release();
++        impl->joystick = nullptr;
++        impl->gamepad = nullptr;
++    }
++    if (had_engine) {
++        SendNeutralPacket(joystick);
++    }
++}
++
++bool RenHDrumPad::IsActive() const {
++    std::scoped_lock lock{impl->mutex};
++    return impl->engine || (impl->dsp && impl->audio_stream);
++}
++
++bool RenHDrumPad::Vibrate(std::int64_t now_us, bool is_right,
++                          const Common::Input::VibrationStatus& status) {
++    Impl::SettingsChange change{};
++    SDL_Joystick* joystick = nullptr;
++    bool handled = false;
++    bool engine_sample = false;
++    {
++        std::scoped_lock lock{impl->mutex};
++        if (!impl->joystick) {
++            return false;
++        }
++        joystick = impl->joystick;
++        change = impl->RefreshUserSettings();
++        const auto& u = impl->user;
++        const auto& api = Api();
++        if (impl->engine) {
++            if (u.hd_enabled) {
++                api.engine_push_half_sample(impl->engine, now_us, is_right,
++                                            ShapeAmplitude(status.low_amplitude, u),
++                                            status.low_frequency,
++                                            ShapeAmplitude(status.high_amplitude, u),
++                                            status.high_frequency);
++                handled = true;
++                engine_sample = true;
++            }
++        } else if (impl->dsp) {
++            if (u.hd_enabled && u.dualsense_enabled) {
++                api.dsp_set_half_target(impl->dsp, is_right,
++                                        ShapeAmplitude(status.low_amplitude, u),
++                                        status.low_frequency,
++                                        ShapeAmplitude(status.high_amplitude, u),
++                                        status.high_frequency);
++                handled = impl->audio_stream != nullptr;
++            } else {
++                // Haptics off: silence the voice coils, the standard rumble takes over
++                api.dsp_set_half_target(impl->dsp, is_right, 0.0f, status.low_frequency, 0.0f,
++                                        status.high_frequency);
++            }
++        }
++    }
++    if (change.stop_engine) {
++        SendNeutralPacket(joystick);
++    }
++    if (change.reconfigure_engine) {
++        impl->ConfigureEngine();
++    }
++    if (engine_sample) {
++        Tick(now_us);
++    }
++    return handled;
++}
++
++void RenHDrumPad::Tick(std::int64_t now_us) {
++    std::array<Uint8, 10> packet{};
++    SDL_Joystick* joystick = nullptr;
++    bool open_audio = false;
++    bool send = false;
++    {
++        std::scoped_lock lock{impl->mutex};
++        if (!impl->joystick) {
++            return;
++        }
++        joystick = impl->joystick;
++        if (impl->dsp && !impl->audio_stream && !impl->audio_opening &&
++            impl->audio_attempts < DualSenseAudioMaxAttempts && now_us >= impl->audio_next_us) {
++            impl->audio_next_us = now_us + 2'000'000;
++            open_audio = true;
++        }
++        send = impl->engine && Api().engine_tick(impl->engine, now_us, packet.data()) == 1;
++    }
++    if (open_audio) {
++        impl->OpenDualSenseAudio();
++    }
++    if (send) {
++        SDL_SendJoystickEffect(joystick, packet.data(), static_cast<int>(packet.size()));
++    }
++}
++
++} // namespace InputCommon
++
++#else // ENABLE_RENHDRUM
++
++namespace InputCommon {
++
++bool IsRenHDrumBuilt() {
++    return false;
++}
++
++bool IsRenHDrumLoaded() {
++    return false;
++}
++
++struct RenHDrumPad::Impl {};
++
++std::shared_ptr<RenHDrumPad> RenHDrumPad::Create(SDL_Joystick*, SDL_Gamepad*) {
++    return nullptr;
++}
++
++RenHDrumPad::RenHDrumPad(std::unique_ptr<Impl> impl_) : impl{std::move(impl_)} {}
++RenHDrumPad::~RenHDrumPad() = default;
++void RenHDrumPad::Shutdown() {}
++bool RenHDrumPad::IsActive() const {
++    return false;
++}
++bool RenHDrumPad::Vibrate(std::int64_t, bool, const Common::Input::VibrationStatus&) {
++    return false;
++}
++void RenHDrumPad::Tick(std::int64_t) {}
++
++} // namespace InputCommon
++
++#endif // ENABLE_RENHDRUM
+diff --git a/src/input_common/drivers/renhdrum_pad.h b/src/input_common/drivers/renhdrum_pad.h
+new file mode 100644
+index 0000000000..55d3fffd55
+--- /dev/null
++++ b/src/input_common/drivers/renhdrum_pad.h
+@@ -0,0 +1,56 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <cstdint>
++#include <memory>
++#include <mutex>
++
++#include <SDL3/SDL.h>
++
++#include "common/input.h"
++
++namespace InputCommon {
++
++/// True when the build includes RenHDrum support (ENABLE_RENHDRUM).
++bool IsRenHDrumBuilt();
++
++/// True when renhdrum.dll (librenhdrum.so / .dylib) was found and loaded. Loads it on first call.
++bool IsRenHDrumLoaded();
++
++/**
++ * Vibration for one SDL controller through RenHDrum (https://github.com/trzz1214/RenHDrum):
++ * Switch Pro Controller / Joy-Con get HD Rumble packets, a wired DualSense gets audio haptics on
++ * its voice coils. Settings come from Settings::values and are re-read on every vibration.
++ */
++class RenHDrumPad {
++public:
++    /// nullptr when RenHDrum is not loaded or the controller is not one it drives.
++    static std::shared_ptr<RenHDrumPad> Create(SDL_Joystick* joystick, SDL_Gamepad* gamepad);
++
++    ~RenHDrumPad();
++
++    RenHDrumPad(const RenHDrumPad&) = delete;
++    RenHDrumPad& operator=(const RenHDrumPad&) = delete;
++
++    /// Releases the engine and the audio stream. Call before the SDL joystick is closed.
++    void Shutdown();
++
++    /// True while RenHDrum plays this controller's vibration.
++    bool IsActive() const;
++
++    /// HLE thread. True when RenHDrum took the vibration; false means use the standard rumble.
++    bool Vibrate(std::int64_t now_us, bool is_right, const Common::Input::VibrationStatus& status);
++
++    /// Input thread, about once per millisecond: due HD Rumble packets and DualSense audio retries.
++    void Tick(std::int64_t now_us);
++
++private:
++    struct Impl;
++    explicit RenHDrumPad(std::unique_ptr<Impl> impl_);
++
++    std::unique_ptr<Impl> impl;
++};
++
++} // namespace InputCommon
+diff --git a/src/input_common/drivers/sdl_driver.cpp b/src/input_common/drivers/sdl_driver.cpp
+index a308554071..0e883ddca5 100644
+--- a/src/input_common/drivers/sdl_driver.cpp
++++ b/src/input_common/drivers/sdl_driver.cpp
+@@ -5,13 +5,16 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <chrono>
+ #include <numbers>
++#include <vector>
+ #include "common/logging.h"
+ #include "common/math_util.h"
+ #include "common/param_package.h"
+ #include "common/settings.h"
+ #include "common/thread.h"
+ #include "common/vector_math.h"
++#include "input_common/drivers/renhdrum_pad.h"
+ #include "input_common/drivers/sdl_driver.h"
+ 
+ namespace InputCommon {
+@@ -92,6 +95,13 @@ public:
+                 : guid{guid_}, port{port_}, sdl_joystick{joystick, &SDL_CloseJoystick},
+                     sdl_controller{game_controller, &SDL_CloseGamepad} {
+         EnableMotion();
++        renhdrum = RenHDrumPad::Create(joystick, game_controller);
++    }
++
++    ~SDLJoystick() {
++        if (renhdrum) {
++            renhdrum->Shutdown();
++        }
+     }
+ 
+     void EnableMotion() {
+@@ -233,6 +243,10 @@ public:
+     }
+ 
+     bool HasHDRumble() const {
++        if (const auto pad = GetRenHDrum(); pad && pad->IsActive()) {
++            return true;
++        }
++
+         constexpr Uint16 valve_vendor_id = 0x28DE;
+         const auto is_known_hd_type = [](SDL_GamepadType type) {
+             return type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO ||
+@@ -306,8 +320,25 @@ public:
+     }
+ 
+     void SetSDLJoystick(SDL_Joystick* joystick, SDL_Gamepad* controller) {
++        std::shared_ptr<RenHDrumPad> old_pad;
++        {
++            std::scoped_lock lock{renhdrum_mutex};
++            old_pad = std::move(renhdrum);
++        }
++        if (old_pad) {
++            old_pad->Shutdown();
++        }
+         sdl_joystick.reset(joystick);
+         sdl_controller.reset(controller);
++        auto new_pad = RenHDrumPad::Create(joystick, controller);
++        std::scoped_lock lock{renhdrum_mutex};
++        renhdrum = std::move(new_pad);
++    }
++
++    /// RenHDrum for this controller, or nullptr when it uses the standard rumble.
++    std::shared_ptr<RenHDrumPad> GetRenHDrum() const {
++        std::scoped_lock lock{renhdrum_mutex};
++        return renhdrum;
+     }
+ 
+     bool IsJoyconLeft() const {
+@@ -406,6 +437,9 @@ private:
      std::unique_ptr<SDL_Gamepad, decltype(&SDL_CloseGamepad)> sdl_controller;
      mutable std::mutex mutex;
  
-+    // Guards renhdrum_engine / dualsense_dsp / ds_audio_stream: SetVibration runs on the HLE thread while
-+    // CloseJoystick frees them. Never held while calling SDL_SendJoystickEffect from the HLE thread.
-+    std::mutex renhdrum_mutex;
-+
-+    RenHdcEngine* renhdrum_engine{nullptr};
-+    RenHdcDualSenseDsp* dualsense_dsp{nullptr};
-+    SDL_AudioStream* ds_audio_stream{nullptr};
-+    static constexpr int DS_AUDIO_MAX_ATTEMPTS = 10;
-+    // SDL no-queue gap while the 5 ms envelope runs (Ryuhdr AmFmNoQueueGapMs)
-+    static constexpr int HD_NO_QUEUE_ENVELOPE_GAP_MS = 10;
-+    int ds_audio_attempts{0};
-+    int64_t ds_audio_next_us{0};
-+    bool ds_audio_inited{false};
++    mutable std::mutex renhdrum_mutex;
++    std::shared_ptr<RenHDrumPad> renhdrum;
 +
      u64 last_motion_update{};
      static constexpr std::size_t InitialMotionRestartThreshold = 200;
      static constexpr std::size_t MaxMotionRestartThreshold = 200 * 64;
-@@ -590,6 +901,21 @@ void SDLDriver::CloseJoystick(SDL_Joystick* sdl_joystick) {
+@@ -588,8 +622,32 @@ void SDLDriver::CloseJoystick(SDL_Joystick* sdl_joystick) {
+ }
+ 
  void SDLDriver::PumpEvents() const {
-     if (initialized) {
-         SDL_PumpEvents();
+-    if (initialized) {
+-        SDL_PumpEvents();
++    if (!initialized) {
++        return;
++    }
++    SDL_PumpEvents();
 +
-+        using namespace std::chrono;
-+        const int64_t now_us = duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count();
-+
++    // RenHDrum paces HD Rumble packets itself; due ones go out here. The pads are ticked after
++    // the map lock is released: a tick calls into SDL, and SDL's controller-added callback can
++    // hold the SDL joystick lock while it waits for the map lock.
++    std::vector<std::shared_ptr<RenHDrumPad>> pads;
++    {
 +        std::scoped_lock lock{joystick_map_mutex};
 +        for (const auto& [guid, joystick_list] : joystick_map) {
 +            for (const auto& joystick : joystick_list) {
-+                if (joystick && joystick->GetRenHDrumEngine()) {
-+                    joystick->TickRenHDrum(now_us);
-+                }
-+                if (joystick && joystick->GetDualSenseDsp()) {
-+                    joystick->MaintainDualSenseAudio(now_us);
++                if (auto pad = joystick->GetRenHDrum()) {
++                    pads.push_back(std::move(pad));
 +                }
 +            }
 +        }
++    }
++    if (pads.empty()) {
++        return;
++    }
++    const auto now = std::chrono::steady_clock::now().time_since_epoch();
++    const auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
++    for (const auto& pad : pads) {
++        pad->Tick(now_us);
      }
  }
  
-@@ -789,6 +1115,18 @@ Common::Input::DriverResult SDLDriver::SetVibration(
+@@ -789,6 +847,18 @@ Common::Input::DriverResult SDLDriver::SetVibration(
      const PadIdentifier& identifier, const Common::Input::VibrationStatus& vibration) {
      const auto joystick =
          GetSDLJoystickByGUID(identifier.guid.RawString(), static_cast<int>(identifier.port));
@@ -1038,60 +1887,43 @@ index a308554071..3cdee5cba8 100644
 +        return Common::Input::DriverResult::InvalidHandle;
 +    }
 +
-+    using namespace std::chrono;
-+    const int64_t now_us = duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count();
-+    const bool is_right = (identifier.pad == 1);
-+
-+    if (joystick->RenHDrumVibrate(now_us, is_right, vibration)) {
-+        return Common::Input::DriverResult::Success;
++    if (const auto pad = joystick->GetRenHDrum()) {
++        const auto now = std::chrono::steady_clock::now().time_since_epoch();
++        const auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
++        if (pad->Vibrate(now_us, identifier.pad == 1, vibration)) {
++            return Common::Input::DriverResult::Success;
++        }
 +    }
 +
      const auto process_amplitude_exp = [](f32 amplitude, f32 factor) {
          return (amplitude + std::pow(amplitude, factor)) * 0.5f * 0xFFFF;
      };
-@@ -822,6 +1160,18 @@ Common::Input::DriverResult SDLDriver::SetVibration(
- bool SDLDriver::IsVibrationEnabled(const PadIdentifier& identifier) {
-     const auto joystick =
-         GetSDLJoystickByGUID(identifier.guid.RawString(), static_cast<int>(identifier.port));
+@@ -839,10 +909,20 @@ bool SDLDriver::IsVibrationEnabled(const PadIdentifier& identifier) {
+         .type = Common::Input::VibrationAmplificationType::Exponential,
+     };
+ 
 +    if (!joystick) {
 +        return false;
 +    }
 +
-+    if (joystick->IsVibrationTested()) {
-+        return joystick->HasVibration();
-+    }
-+
-+    if (joystick->GetRenHDrumEngine() || joystick->GetDualSenseDsp()) {
+     if (joystick->IsVibrationTested()) {
+         return joystick->HasVibration();
+     }
+ 
++    // RenHDrum drives the pad without SDL's rumble, so the test rumble below would prove nothing
++    if (joystick->GetRenHDrum()) {
 +        joystick->EnableVibration(true);
 +        return true;
 +    }
- 
-     static constexpr Common::Input::VibrationStatus test_vibration{
-         .low_amplitude = 1,
-@@ -839,10 +1189,6 @@ bool SDLDriver::IsVibrationEnabled(const PadIdentifier& identifier) {
-         .type = Common::Input::VibrationAmplificationType::Exponential,
-     };
- 
--    if (joystick->IsVibrationTested()) {
--        return joystick->HasVibration();
--    }
--
++
      // First vibration might fail
      joystick->RumblePlay(test_vibration);
  
 diff --git a/src/input_common/drivers/sdl_driver.h b/src/input_common/drivers/sdl_driver.h
-index e6751b6688..f253991f06 100644
+index e6751b6688..c04a823433 100644
 --- a/src/input_common/drivers/sdl_driver.h
 +++ b/src/input_common/drivers/sdl_driver.h
-@@ -12,6 +12,7 @@
- #include "common/container/unordered_map.h"
- 
- #include <SDL3/SDL.h>
-+#include <renhdrum.h>
- 
- #include "common/common_types.h"
- #include "common/threadsafe_queue.h"
-@@ -115,7 +116,7 @@ private:
+@@ -115,7 +115,7 @@ private:
  
      /// Map of GUID of a list of corresponding virtual Joysticks
      ::Common::unordered_map<Common::UUID, std::vector<std::shared_ptr<SDLJoystick>>> joystick_map;
@@ -1101,23 +1933,431 @@ index e6751b6688..f253991f06 100644
      std::atomic<bool> initialized = false;
      bool start_thread;
 diff --git a/src/yuzu/CMakeLists.txt b/src/yuzu/CMakeLists.txt
-index 2052b63394..71b47545ff 100644
+index 2052b63394..d11d8fa0bd 100644
 --- a/src/yuzu/CMakeLists.txt
 +++ b/src/yuzu/CMakeLists.txt
-@@ -481,3 +481,13 @@ endif()
+@@ -140,6 +140,8 @@ add_executable(yuzu
+     configuration/configure_ui.cpp
+     configuration/configure_ui.h
+     configuration/configure_ui.ui
++    configuration/configure_hd_rumble.cpp
++    configuration/configure_hd_rumble.h
+     configuration/configure_vibration.cpp
+     configuration/configure_vibration.h
+     configuration/configure_vibration.ui
+@@ -481,3 +483,18 @@ endif()
  target_link_libraries(yuzu PRIVATE OpenSSL::SSL OpenSSL::Crypto SDL3::SDL3)
  
  create_target_directory_groups(yuzu)
 +
-+# Copy renhdrum.dll alongside the emulator executable
-+if (EXISTS "${RENHDRUM_DIR}/target/release/renhdrum.dll")
++if (ENABLE_RENHDRUM AND RENHDRUM_DOWNLOAD AND WIN32)
++    set(RENHDRUM_VERSION 0.1.1)
++    set(RENHDRUM_DLL "${CMAKE_BINARY_DIR}/renhdrum/${RENHDRUM_VERSION}/renhdrum.dll")
++    if (NOT EXISTS "${RENHDRUM_DLL}")
++        file(DOWNLOAD
++            "https://github.com/trzz1214/RenHDrum/releases/download/v${RENHDRUM_VERSION}/renhdrum.dll"
++            "${RENHDRUM_DLL}"
++            EXPECTED_HASH SHA256=b087712e84d481800e31578130a7d82c7811ad1d10f897504a8e7a8ec49489ce
++            SHOW_PROGRESS)
++    endif()
 +    add_custom_command(TARGET yuzu POST_BUILD
-+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-+        "${RENHDRUM_DIR}/target/release/renhdrum.dll"
-+        "$<TARGET_FILE_DIR:yuzu>/renhdrum.dll"
-+        VERBATIM
-+    )
++        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${RENHDRUM_DLL}" "$<TARGET_FILE_DIR:yuzu>"
++        VERBATIM)
 +endif()
+diff --git a/src/yuzu/configuration/configure_hd_rumble.cpp b/src/yuzu/configuration/configure_hd_rumble.cpp
+new file mode 100644
+index 0000000000..155912680d
+--- /dev/null
++++ b/src/yuzu/configuration/configure_hd_rumble.cpp
+@@ -0,0 +1,289 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include <algorithm>
++
++#include <QCheckBox>
++#include <QComboBox>
++#include <QDialogButtonBox>
++#include <QFormLayout>
++#include <QGroupBox>
++#include <QHBoxLayout>
++#include <QLabel>
++#include <QListWidget>
++#include <QPushButton>
++#include <QSlider>
++#include <QSpinBox>
++#include <QStackedWidget>
++#include <QVBoxLayout>
++
++#include "common/settings.h"
++#include "input_common/drivers/renhdrum_pad.h"
++#include "yuzu/configuration/configure_hd_rumble.h"
++
++namespace {
++// Room for "1000%" plus the arrows, whatever the font and scaling
++void FitPercentSpinBox(QSpinBox* box) {
++    box->setMinimumWidth(box->fontMetrics().horizontalAdvance(QStringLiteral("10000%")) + 40);
++}
++
++QLabel* MakeNote(const QString& text) {
++    auto* label = new QLabel(text);
++    label->setWordWrap(true);
++    label->setStyleSheet(QStringLiteral("color: palette(mid);"));
++    return label;
++}
++} // namespace
++
++ConfigureHdRumble::ConfigureHdRumble(QWidget* parent) : QDialog(parent) {
++    setWindowTitle(tr("HD Rumble"));
++    setMinimumSize(640, 460);
++
++    auto* root = new QVBoxLayout(this);
++
++    // Header: master switch
++    auto* header = new QHBoxLayout;
++    auto* title = new QLabel(tr("<b>HD Rumble</b>"));
++    hd_enabled = new QCheckBox(tr("Enabled"));
++    hd_enabled->setToolTip(tr("Off: the controllers use the emulator's standard rumble."));
++    header->addWidget(title);
++    header->addStretch();
++    header->addWidget(hd_enabled);
++    root->addLayout(header);
++    if (!InputCommon::IsRenHDrumLoaded()) {
++        auto* missing = new QLabel(
++            tr("renhdrum.dll was not found next to the emulator, so the controllers use the "
++               "standard rumble. Get it from <a href=\"https://github.com/trzz1214/RenHDrum/"
++               "releases\">the RenHDrum releases</a> and restart the emulator."));
++        missing->setWordWrap(true);
++        missing->setOpenExternalLinks(true);
++        root->addWidget(missing);
++    }
++
++    // Intensity: all controllers. Saved per game when the game has its own value.
++    auto* gain_row = new QHBoxLayout;
++    gain_slider = new QSlider(Qt::Horizontal);
++    gain_slider->setRange(25, 1000);
++    gain = new QSpinBox;
++    gain->setRange(25, 1000);
++    gain->setSingleStep(25);
++    gain->setSuffix(QStringLiteral("%"));
++    FitPercentSpinBox(gain);
++    connect(gain_slider, &QSlider::valueChanged, gain, &QSpinBox::setValue);
++    connect(gain, qOverload<int>(&QSpinBox::valueChanged), gain_slider, &QSlider::setValue);
++    gain_row->addWidget(new QLabel(tr("Intensity")));
++    gain_row->addWidget(gain_slider, 1);
++    gain_row->addWidget(gain);
++    root->addLayout(gain_row);
++
++    auto* boost_row = new QHBoxLayout;
++    boost_slider = new QSlider(Qt::Horizontal);
++    boost_slider->setRange(0, 100);
++    boost = new QSpinBox;
++    boost->setRange(0, 100);
++    boost->setSingleStep(5);
++    boost->setSuffix(QStringLiteral("%"));
++    FitPercentSpinBox(boost);
++    boost->setToolTip(tr("Lifts weak vibrations more than strong ones. 0% keeps the game's "
++                         "curve."));
++    connect(boost_slider, &QSlider::valueChanged, boost, &QSpinBox::setValue);
++    connect(boost, qOverload<int>(&QSpinBox::valueChanged), boost_slider, &QSlider::setValue);
++    boost_row->addWidget(new QLabel(tr("Weak rumble boost")));
++    boost_row->addWidget(boost_slider, 1);
++    boost_row->addWidget(boost);
++    root->addLayout(boost_row);
++    const bool per_game = !Settings::values.hd_rumble_gain.UsingGlobal();
++    root->addWidget(MakeNote(
++        per_game ? tr("Intensity: this game has its own value, and changes here apply to it.")
++                 : tr("Intensity multiplies the game's rumble. Some Switch 2 games (Ocarina of "
++                      "Time) send very weak values that the Joy-Con 2 still plays strongly: "
++                      "try 400-600% for them.")));
++
++    // Body: controller list on the left, its settings on the right
++    auto* body = new QHBoxLayout;
++    page_list = new QListWidget;
++    page_list->addItem(tr("Switch Controller"));
++    page_list->addItem(tr("DualSense"));
++    page_list->setFixedWidth(170);
++    pages = new QStackedWidget;
++    pages->addWidget(CreateSwitchPage());
++    pages->addWidget(CreateDualSensePage());
++    connect(page_list, &QListWidget::currentRowChanged, pages, &QStackedWidget::setCurrentIndex);
++    page_list->setCurrentRow(0);
++    body->addWidget(page_list);
++    body->addWidget(pages, 1);
++    root->addLayout(body, 1);
++
++    root->addWidget(MakeNote(
++        tr("Changes reach connected controllers on their next vibration. To feel them now, open "
++           "the Vibration settings and hold a button on the controller.")));
++
++    auto* footer = new QHBoxLayout;
++    auto* credit = new QLabel(tr("Powered by RenHDrum"));
++    credit->setStyleSheet(QStringLiteral("color: palette(mid);"));
++    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel |
++                                         QDialogButtonBox::RestoreDefaults);
++    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
++    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
++    connect(buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this,
++            &ConfigureHdRumble::RestoreDefaults);
++    footer->addWidget(credit);
++    footer->addStretch();
++    footer->addWidget(buttons);
++    root->addLayout(footer);
++
++    connect(hd_enabled, &QCheckBox::toggled, this, &ConfigureHdRumble::UpdateEnabledState);
++    connect(ds_enabled, &QCheckBox::toggled, this, &ConfigureHdRumble::UpdateEnabledState);
++    connect(envelope_5ms, &QCheckBox::toggled, this, &ConfigureHdRumble::UpdateEnabledState);
++
++    LoadConfiguration();
++}
++
++ConfigureHdRumble::~ConfigureHdRumble() = default;
++
++QWidget* ConfigureHdRumble::CreateSwitchPage() {
++    auto* page = new QWidget;
++    auto* layout = new QVBoxLayout(page);
++    layout->setContentsMargins(0, 0, 0, 0);
++    layout->addWidget(MakeNote(tr("Pro Controller and Joy-Con: the game's HD Rumble sent with "
++                                  "full detail instead of a plain motor rumble.")));
++
++    wired_group = new QGroupBox(tr("Wired (USB)"));
++    auto* wired = new QFormLayout(wired_group);
++    usb_interval = new QSpinBox;
++    usb_interval->setRange(5, 100);
++    usb_interval->setSuffix(tr(" ms"));
++    usb_interval->setToolTip(tr("Time between rumble packets. 15 ms is the console's rate."));
++    envelope_5ms = new QCheckBox(tr("5 ms envelope (three samples per packet)"));
++    frequency_in_packet = new QCheckBox(tr("Frequency changes inside a packet"));
++    crisp_notes = new QCheckBox(tr("Crisp notes (stronger attack, softer sustain)"));
++    wired->addRow(tr("Packet interval"), usb_interval);
++    wired->addRow(envelope_5ms);
++    wired->addRow(frequency_in_packet);
++    wired->addRow(crisp_notes);
++    layout->addWidget(wired_group);
++
++    bt_group = new QGroupBox(tr("Bluetooth"));
++    auto* bt = new QFormLayout(bt_group);
++    bt_level = new QComboBox;
++    bt_level->addItem(tr("1 - Stable (60 ms)"), 1);
++    bt_level->addItem(tr("2 - Balanced (45 ms)"), 2);
++    bt_level->addItem(tr("3 - Quality (35 ms)"), 3);
++    bt_level->setToolTip(tr("Lower levels send less often, which keeps input lag down on a busy "
++                            "Bluetooth link."));
++    bt_after_input = new QCheckBox(tr("Send right after an input report"));
++    bt_fast = new QCheckBox(tr("5 ms envelope while the link is idle"));
++    bt_crisp_notes = new QCheckBox(tr("Crisp notes"));
++    bt->addRow(tr("Level"), bt_level);
++    bt->addRow(bt_after_input);
++    bt->addRow(bt_fast);
++    bt->addRow(bt_crisp_notes);
++    layout->addWidget(bt_group);
++
++    layout->addStretch();
++    return page;
++}
++
++QWidget* ConfigureHdRumble::CreateDualSensePage() {
++    auto* page = new QWidget;
++    auto* layout = new QVBoxLayout(page);
++    layout->setContentsMargins(0, 0, 0, 0);
++    layout->addWidget(MakeNote(tr("Rumble through the haptic voice coils of the PS5 controller "
++                                  "(DualSense and DualSense Edge), as 48,000 samples per second "
++                                  "of audio.")));
++
++    auto* group = new QGroupBox(tr("Wired (USB)"));
++    auto* form = new QFormLayout(group);
++    ds_enabled = new QCheckBox(tr("Use the haptic voice coils"));
++    ds_enabled->setToolTip(tr("Off: the DualSense uses its standard rumble."));
++    ds_volume_slider = new QSlider(Qt::Horizontal);
++    ds_volume_slider->setRange(0, 100);
++    ds_volume = new QSpinBox;
++    ds_volume->setRange(0, 100);
++    ds_volume->setSuffix(QStringLiteral("%"));
++    FitPercentSpinBox(ds_volume);
++    connect(ds_volume_slider, &QSlider::valueChanged, ds_volume, &QSpinBox::setValue);
++    connect(ds_volume, qOverload<int>(&QSpinBox::valueChanged), ds_volume_slider,
++            &QSlider::setValue);
++    auto* volume_row = new QHBoxLayout;
++    volume_row->addWidget(ds_volume_slider, 1);
++    volume_row->addWidget(ds_volume);
++    ds_crisp_notes = new QCheckBox(tr("Crisp notes"));
++    form->addRow(ds_enabled);
++    form->addRow(tr("Volume"), volume_row);
++    form->addRow(ds_crisp_notes);
++    layout->addWidget(group);
++
++    layout->addWidget(MakeNote(tr("On Bluetooth the DualSense uses its standard rumble.")));
++    layout->addStretch();
++    return page;
++}
++
++void ConfigureHdRumble::LoadConfiguration() {
++    const auto& s = Settings::values;
++    hd_enabled->setChecked(s.hd_rumble_enabled.GetValue());
++    gain->setValue(std::clamp(s.hd_rumble_gain.GetValue(), 25, 1000));
++    boost->setValue(std::clamp(s.hd_rumble_low_boost.GetValue(), 0, 100));
++    usb_interval->setValue(std::clamp(s.hd_rumble_usb_interval_ms.GetValue(), 5, 100));
++    envelope_5ms->setChecked(s.hd_rumble_envelope_5ms.GetValue());
++    frequency_in_packet->setChecked(s.hd_rumble_frequency_in_packet.GetValue());
++    crisp_notes->setChecked(s.hd_rumble_crisp_notes.GetValue());
++    bt_level->setCurrentIndex(std::clamp(s.hd_rumble_bluetooth_level.GetValue(), 1, 3) - 1);
++    bt_after_input->setChecked(s.hd_rumble_bt_after_input.GetValue());
++    bt_fast->setChecked(s.hd_rumble_bt_fast.GetValue());
++    bt_crisp_notes->setChecked(s.hd_rumble_bt_crisp_notes.GetValue());
++    ds_enabled->setChecked(s.dualsense_haptics_enabled.GetValue());
++    ds_volume->setValue(std::clamp(s.dualsense_haptics_volume.GetValue(), 0, 100));
++    ds_crisp_notes->setChecked(s.dualsense_crisp_notes.GetValue());
++    UpdateEnabledState();
++}
++
++void ConfigureHdRumble::RestoreDefaults() {
++    hd_enabled->setChecked(true);
++    gain->setValue(100);
++    boost->setValue(0);
++    usb_interval->setValue(15);
++    envelope_5ms->setChecked(true);
++    frequency_in_packet->setChecked(true);
++    crisp_notes->setChecked(true);
++    bt_level->setCurrentIndex(2);
++    bt_after_input->setChecked(true);
++    bt_fast->setChecked(true);
++    bt_crisp_notes->setChecked(true);
++    ds_enabled->setChecked(true);
++    ds_volume->setValue(100);
++    ds_crisp_notes->setChecked(true);
++    UpdateEnabledState();
++}
++
++void ConfigureHdRumble::UpdateEnabledState() {
++    const bool on = hd_enabled->isChecked();
++    pages->setEnabled(on);
++    page_list->setEnabled(on);
++    // The extra wired cards only run on top of the 5 ms envelope
++    frequency_in_packet->setEnabled(envelope_5ms->isChecked());
++    crisp_notes->setEnabled(envelope_5ms->isChecked());
++    ds_volume_slider->setEnabled(ds_enabled->isChecked());
++    ds_volume->setEnabled(ds_enabled->isChecked());
++    ds_crisp_notes->setEnabled(ds_enabled->isChecked());
++}
++
++void ConfigureHdRumble::ApplyConfiguration() {
++    auto& s = Settings::values;
++    const bool on = hd_enabled->isChecked();
++    s.hd_rumble_enabled.SetValue(on);
++    s.hd_rumble_gain.SetValue(gain->value());
++    s.hd_rumble_low_boost.SetValue(boost->value());
++    s.hd_rumble_usb_interval_ms.SetValue(usb_interval->value());
++    s.hd_rumble_envelope_5ms.SetValue(envelope_5ms->isChecked());
++    s.hd_rumble_frequency_in_packet.SetValue(frequency_in_packet->isChecked());
++    s.hd_rumble_crisp_notes.SetValue(crisp_notes->isChecked());
++    s.hd_rumble_bluetooth_level.SetValue(bt_level->currentData().toInt());
++    s.hd_rumble_bt_after_input.SetValue(bt_after_input->isChecked());
++    s.hd_rumble_bt_fast.SetValue(bt_fast->isChecked());
++    s.hd_rumble_bt_crisp_notes.SetValue(bt_crisp_notes->isChecked());
++    // The master switch also turns the DualSense haptics off (the SDL driver checks both)
++    s.dualsense_haptics_enabled.SetValue(ds_enabled->isChecked());
++    s.dualsense_haptics_volume.SetValue(ds_volume->value());
++    s.dualsense_crisp_notes.SetValue(ds_crisp_notes->isChecked());
++}
+diff --git a/src/yuzu/configuration/configure_hd_rumble.h b/src/yuzu/configuration/configure_hd_rumble.h
+new file mode 100644
+index 0000000000..1c257a4ed8
+--- /dev/null
++++ b/src/yuzu/configuration/configure_hd_rumble.h
+@@ -0,0 +1,59 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <QDialog>
++
++class QCheckBox;
++class QComboBox;
++class QGroupBox;
++class QListWidget;
++class QSlider;
++class QSpinBox;
++class QStackedWidget;
++
++/// Settings for RenHDrum: HD Rumble on Switch Pro Controller / Joy-Con and the DualSense voice
++/// coil haptics. The SDL driver reads them on every vibration, so connected controllers pick up
++/// a change as soon as the dialog is accepted.
++class ConfigureHdRumble : public QDialog {
++    Q_OBJECT
++
++public:
++    explicit ConfigureHdRumble(QWidget* parent);
++    ~ConfigureHdRumble() override;
++
++    void ApplyConfiguration();
++
++private:
++    QWidget* CreateSwitchPage();
++    QWidget* CreateDualSensePage();
++    void LoadConfiguration();
++    void RestoreDefaults();
++    void UpdateEnabledState();
++
++    QCheckBox* hd_enabled{};
++    QSlider* gain_slider{};
++    QSpinBox* gain{};
++    QSlider* boost_slider{};
++    QSpinBox* boost{};
++    QListWidget* page_list{};
++    QStackedWidget* pages{};
++
++    QGroupBox* wired_group{};
++    QSpinBox* usb_interval{};
++    QCheckBox* envelope_5ms{};
++    QCheckBox* frequency_in_packet{};
++    QCheckBox* crisp_notes{};
++
++    QGroupBox* bt_group{};
++    QComboBox* bt_level{};
++    QCheckBox* bt_after_input{};
++    QCheckBox* bt_fast{};
++    QCheckBox* bt_crisp_notes{};
++
++    QCheckBox* ds_enabled{};
++    QSlider* ds_volume_slider{};
++    QSpinBox* ds_volume{};
++    QCheckBox* ds_crisp_notes{};
++};
+diff --git a/src/yuzu/configuration/configure_vibration.cpp b/src/yuzu/configuration/configure_vibration.cpp
+index 6b1f4527b8..dd954d385f 100644
+--- a/src/yuzu/configuration/configure_vibration.cpp
++++ b/src/yuzu/configuration/configure_vibration.cpp
+@@ -7,6 +7,10 @@
+ #include "hid_core/hid_types.h"
+ #include "ui_configure_vibration.h"
+ #include "yuzu/configuration/configure_vibration.h"
++#include "input_common/drivers/renhdrum_pad.h"
++#include "yuzu/configuration/configure_hd_rumble.h"
++
++#include <QPushButton>
+ 
+ ConfigureVibration::ConfigureVibration(QWidget* parent, Core::HID::HIDCore& hid_core_)
+     : QDialog(parent), ui(std::make_unique<Ui::ConfigureVibration>()), hid_core{hid_core_} {
+@@ -45,6 +49,18 @@ ConfigureVibration::ConfigureVibration(QWidget* parent, Core::HID::HIDCore& hid_
+         ui->checkBoxAccurateVibration->setDisabled(true);
+     }
+ 
++    auto* hd_rumble_button = new QPushButton(tr("HD Rumble..."));
++    hd_rumble_button->setToolTip(
++        tr("HD Rumble for Pro Controller / Joy-Con and DualSense haptics (RenHDrum)."));
++    connect(hd_rumble_button, &QPushButton::clicked, this, [this] {
++        ConfigureHdRumble dialog(this);
++        if (dialog.exec() == QDialog::Accepted) {
++            dialog.ApplyConfiguration();
++        }
++    });
++    ui->verticalLayout->addWidget(hd_rumble_button);
++    hd_rumble_button->setVisible(InputCommon::IsRenHDrumBuilt());
++
+     RetranslateUI();
+ }
+ 
 -- 
 2.53.0.windows.3
 

@@ -6,18 +6,16 @@ This repository is a **patch series**. You apply it to an emulator's source tree
 
 | Patch | What it adds |
 |---|---|
-| `0001` | Vibration routed through RenHDrum: HD Rumble packets for Switch controllers, 48 kHz audio haptics for a wired DualSense. SDL3 built from source with RenHDrum's HD Rumble transport patches. |
-| `0002` | An **HD Rumble** settings dialog (Controls > Vibration > Configure > HD Rumble...). |
-| `0003` | Per-game **Intensity** and **Weak rumble boost**, for games that send very weak vibration (see [Findings](#findings-ocarina-of-time)). |
-| `0004` | `EDEN_HDRUMBLE_TRACE=1`: writes every vibration value a game sends to a CSV, for studying a game's HD Rumble. Optional. |
+| `0001` | Vibration routed through RenHDrum: HD Rumble packets for Switch controllers, 48 kHz audio haptics for a wired DualSense. Includes an **HD Rumble** settings dialog with a per-game **Intensity** and **Weak rumble boost**. |
+| `0002` | `EDEN_HDRUMBLE_TRACE=1`: writes every vibration value a game sends to a CSV, for studying a game's HD Rumble. Optional; it depends on HID command 214, which Eglantine and Lichii have. |
 
-Patches `0002`-`0004` depend on `0001`. `0004` is a diagnostic tool and can be left out.
+The same change is proposed upstream: see [Upstream status](#upstream-status).
 
 ---
 
 ## What it does
 
-Switch and Switch 2 games describe vibration as two bands (low and high), each with an amplitude and a frequency, sent every few milliseconds. Most emulators collapse that into a plain "motor strength" rumble. With these patches, the emulator hands the full signal to RenHDrum, which plays it on the controller:
+Switch and Switch 2 games describe vibration as two bands (low and high), each with an amplitude and a frequency, sent every few milliseconds. Most emulators collapse that into a plain "motor strength" rumble. With this series, the emulator hands the full signal to RenHDrum, which plays it on the controller:
 
 | Controller | Connection | What you get |
 |---|---|---|
@@ -26,7 +24,9 @@ Switch and Switch 2 games describe vibration as two bands (low and high), each w
 | Sony DualSense / DualSense Edge | Bluetooth | Standard rumble (unchanged) |
 | Other controllers | any | Standard rumble (unchanged) |
 
-Switch 2 games send their vibration through HID command 214 (`SendNx2VibrationValues`), which Eglantine and Lichii already implement, so their HD Rumble reaches RenHDrum too.
+RenHDrum is a separate library, `renhdrum.dll`, that the emulator **loads at runtime**. If it is not next to the emulator, nothing changes: every controller keeps the standard rumble.
+
+Switch 2 games send their vibration through HID command 214 (`SendNx2VibrationValues`), which Eglantine and Lichii implement, so their HD Rumble reaches RenHDrum too.
 
 For how HD Rumble works and how RenHDrum reproduces it, read the RenHDrum author's [research notebook](https://ryuhdr.threedola.workers.dev) and the [research notes in the RenHDrum repository](https://github.com/trzz1214/RenHDrum/tree/main/docs/research).
 
@@ -34,21 +34,21 @@ For how HD Rumble works and how RenHDrum reproduces it, read the RenHDrum author
 
 ## Compatibility
 
-The series was written against **Lichii `frizti-v1`** ([Frizti/Lichii](https://github.com/Frizti/Lichii)), which is where it was built and played, and carried unchanged to `frizti-v2`. Weekly CI checks that it still applies to these trees:
+Weekly CI checks that the series still applies to these trees:
 
-| Tree | Branch | Applies | Built and played |
+| Tree | Branch | Applies | Built |
 |---|---|---|---|
-| [Frizti/Lichii](https://github.com/Frizti/Lichii) | `frizti-v1` tag | ✅ | ✅ Windows x64, MSVC |
-| [Frizti/Lichii](https://github.com/Frizti/Lichii) | `frizti-v2` tag | ✅ | ✅ built (Windows x64, MSVC) |
-| [Frizti/Lichii](https://github.com/Frizti/Lichii) | `nx2` | ✅ | not yet |
-| [zortos293/Lichii](https://github.com/zortos293/Lichii) | `nx2` | ✅ | not yet |
-| [Djihads80/Eglantine](https://github.com/Djihads80/Eglantine) | `nx2` | ✅ | not yet |
+| [Frizti/Lichii](https://github.com/Frizti/Lichii) | `frizti-v1` tag | ✅ | |
+| [Frizti/Lichii](https://github.com/Frizti/Lichii) | `frizti-v2` tag | ✅ | |
+| [Frizti/Lichii](https://github.com/Frizti/Lichii) | `nx2` | ✅ | ✅ Windows x64 (MSVC) |
+| [zortos293/Lichii](https://github.com/zortos293/Lichii) | `nx2` | ✅ | ✅ Windows x64 (MSVC), Linux (GCC 13, `-Werror`, tests) |
+| [Djihads80/Eglantine](https://github.com/Djihads80/Eglantine) | `nx2` | ✅ | |
 
 [![Check patches](https://github.com/samaBR85/renhdrum-eden/actions/workflows/check-patches.yml/badge.svg)](https://github.com/samaBR85/renhdrum-eden/actions/workflows/check-patches.yml)
 
-Upstream [Eden](https://git.eden-emu.dev/eden-emu/eden) and other forks share the same input code and should take the series with little or no change, but have not been tried. If you port it to another fork, a pull request adding it to this table is welcome.
+It was played on Windows with a wired DualSense Edge, in Ocarina of Time and Donkey Kong Bananza, on Lichii `frizti-v1` and `frizti-v2`. Those play tests used an earlier layout of the same code (inline in the SDL driver). The current layout was then run on `zortos293/Lichii nx2`: the downloaded `renhdrum.dll` loaded, the DualSense was picked up, its haptics audio device opened, and the emulator closed cleanly. No Switch Pro Controller was available for testing.
 
-Only Windows x64 (MSVC) has been built so far. The code itself is not Windows-specific (RenHDrum builds a `.so` and a `.dylib` too), but the CMake part links `renhdrum.dll.lib` and needs a small change for other platforms.
+Upstream [Eden](https://git.eden-emu.dev/eden-emu/eden) and other forks share the same input code and should take the series with little or no change, but have not been tried. If you port it to another fork, a pull request adding it to this table is welcome.
 
 ---
 
@@ -59,50 +59,40 @@ Only Windows x64 (MSVC) has been built so far. The code itself is not Windows-sp
 git am --3way /path/to/renhdrum-eden/patches/*.patch
 ```
 
-To take only some of them, pass the files you want, in order (`0001` is always needed). If a patch does not apply, `git am --3way` leaves conflict markers. Fix them, then `git add` the files and run `git am --continue`.
+To leave the trace out, apply only `0001`. If a patch does not apply, `git am --3way` leaves conflict markers. Fix them, then `git add` the files and run `git am --continue`.
 
 ---
 
 ## Building
 
-### 1. Build RenHDrum
+Use the emulator's normal build (its `docs/Build.md`). No Rust and no extra library are needed to compile: RenHDrum's C header comes with the patch (`externals/renhdrum/renhdrum.h`, v0.1.1).
 
-You need [Rust](https://rustup.rs/).
+Three CMake options control it:
 
-```bash
-git clone https://github.com/trzz1214/RenHDrum.git
-cd RenHDrum
-cargo build --release
-```
+| Option | Default | What it does |
+|---|---|---|
+| `ENABLE_RENHDRUM` | ON | Builds the RenHDrum support. Harmless without the library. |
+| `RENHDRUM_DOWNLOAD` | OFF | Windows: downloads the official [RenHDrum v0.1.1](https://github.com/trzz1214/RenHDrum/releases/tag/v0.1.1) `renhdrum.dll`, checks its SHA-256, and copies it next to the emulator executable. |
+| `RENHDRUM_SDL_PATCHES` | OFF | Builds SDL3 3.4.8 from source with [RenHDrum's two SDL3 patches](https://github.com/trzz1214/RenHDrum/tree/main/integrations/sdl3/sdl3-patches) (a separate `sdl3-hdrumble` package). They add "no-queue" and "write after input" modes for Switch controllers. Without them RenHDrum paces queued writes by its own clock. They are opt-in because they also change SDL's default Switch rumble refresh. |
 
-This produces `target/release/renhdrum.dll` and `target/release/renhdrum.dll.lib`. CMake looks for the RenHDrum checkout next to the emulator source (`../RenHDrum`); point it elsewhere with `-DRENHDRUM_DIR=...`. The configure step stops with a clear message if RenHDrum is not built.
-
-### 2. Configure the emulator
-
-Use the emulator's normal build (its `docs/Build.md`), with **two extra rules**:
-
-- **SDL3 must be built from source**, so the RenHDrum SDL patches get applied. Windows builds download a prebuilt SDL3 by default, which does not have them. Add:
-  `-DYUZU_USE_BUNDLED_SDL3=OFF -DSDL3_FORCE_BUNDLED=ON`
-  The configure log then shows `patching file src/joystick/hidapi/SDL_hidapi_switch.c` and friends.
-- **Point CMake at RenHDrum** if it is not in `../RenHDrum`: `-DRENHDRUM_DIR=D:/path/to/RenHDrum`
-
-The Windows configure line used for the tested build (Qt 6.8.3 `msvc2022_64`, Ninja, Visual Studio 2022 Build Tools environment loaded):
+For the full experience on Windows, add `-DRENHDRUM_DOWNLOAD=ON -DRENHDRUM_SDL_PATCHES=ON`. The configure line used for the tested build (Qt 6.8.3 `msvc2022_64`, Ninja, Visual Studio 2022 Build Tools environment loaded):
 
 ```bat
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
   -DYUZU_TESTS=OFF -DYUZU_CMD=ON -DYUZU_ROOM=OFF -DYUZU_USE_BUNDLED_QT=OFF ^
-  -DYUZU_USE_BUNDLED_SDL3=OFF -DSDL3_FORCE_BUNDLED=ON ^
+  -DENABLE_RENHDRUM=ON -DRENHDRUM_DOWNLOAD=ON -DRENHDRUM_SDL_PATCHES=ON ^
   -DVulkanHeaders_FORCE_BUNDLED=ON -DVulkanUtilityLibraries_FORCE_BUNDLED=ON ^
-  -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64 ^
-  -DRENHDRUM_DIR=C:/src/RenHDrum
+  -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64
 cmake --build build
 ```
+
+On Linux and macOS, build `librenhdrum.so` / `librenhdrum.dylib` from [RenHDrum](https://github.com/trzz1214/RenHDrum) (`cargo build --release`) and put it where the dynamic loader finds it.
 
 Build tips:
 
 - **CMake from Visual Studio.** If another CMake comes first on your `PATH` (MSYS2 or devkitPro, for example), call Visual Studio's own `cmake.exe` instead. A foreign CMake fails at "Detecting C compiler ABI info".
 - **Shader compiler.** `glslangValidator` must be on `PATH`. The [glslang releases](https://github.com/KhronosGroup/glslang/releases) ship it as `glslang.exe`; copy it to `glslangValidator.exe`.
-- **`renhdrum.dll`.** The build copies it next to the emulator executable. When you package the emulator, ship it alongside.
+- **Packaging.** When you package the emulator, ship `renhdrum.dll` next to it.
 
 ---
 
@@ -111,18 +101,21 @@ Build tips:
 Nothing to switch on: a supported controller uses RenHDrum as soon as it connects. The emulator log confirms it:
 
 ```
-Initialized RenHDrum DualSense DSP for controller 054C:0DF2
-DualSense haptics audio opened on "Speakers (DualSense Edge Wireless Controller)" (... 4 ch 48000 Hz ...)
+RenHDrum: loaded renhdrum.dll
+RenHDrum: DualSense haptics for 054C:0DF2
+RenHDrum: DualSense haptics on "Speakers (DualSense Edge Wireless Controller)"
 ```
 
 or, for a Switch controller:
 
 ```
-Initialized RenHDrum engine for Switch controller 057E:2009 (BT: false)
-RenHDrum HD Rumble wired: 15 ms, no-queue (written while SDL is idle), card 3 5 ms envelope, cards 5 + 7, card 8 crisp notes
+RenHDrum: HD Rumble for 057E:2009 (Bluetooth: false)
+RenHDrum HD Rumble wired: 15 ms, no-queue writes, 5 ms envelope, crisp notes
 ```
 
-### The HD Rumble dialog (patch 0002)
+Without the library, the log says `RenHDrum: renhdrum.dll not found, using the standard rumble`, and so does the HD Rumble dialog.
+
+### The HD Rumble dialog
 
 Open it from **Emulation > Configure > Controls > Vibration: Configure > HD Rumble...**:
 
@@ -130,18 +123,18 @@ Open it from **Emulation > Configure > Controls > Vibration: Configure > HD Rumb
 
    ![Controls page: the Configure button under Vibration](docs/screenshots/controls-vibration-configure.png)
 
-2. In **Configure Vibration**, click **HD Rumble...**. Keep the player's strength at 100 %; **Enable Accurate Vibration** can stay off.
+2. In **Configure Vibration**, click **HD Rumble...**. Keep the player's strength at 100 %. Turning on **Enable Accurate Vibration** is recommended: without it, the emulator drops vibrations that come less than 15 ms apart before RenHDrum sees them.
 
    ![Configure Vibration with the HD Rumble button](docs/screenshots/vibration-dialog.png)
 
-3. The HD Rumble dialog. This one was opened with Ocarina of Time running, so **Intensity** and **Weak rumble boost** show that game's own values (1000 % and 60 %).
+3. The HD Rumble dialog. This one was opened with Ocarina of Time running, so **Intensity** and **Weak rumble boost** show that game's own values (1000 % and 60 %). This screenshot was taken before the percent fields were widened; `1000%` is cut off.
 
    ![The HD Rumble dialog on the DualSense page](docs/screenshots/hd-rumble-dialog.png)
 
 What each setting does:
 
 - **Enabled** turns RenHDrum on or off for every controller. Off means the emulator's standard rumble.
-- **Intensity** and **Weak rumble boost** (patch 0003) apply to all controllers. See below.
+- **Intensity** and **Weak rumble boost** apply to all controllers. See below.
 - **Switch Controller**
   - **Wired:** packet interval (15 ms is the console's rate), 5 ms envelope, frequency changes inside a packet, crisp notes.
   - **Bluetooth:** level 1 Stable / 2 Balanced / 3 Quality (60 / 45 / 35 ms), send right after an input report, 5 ms envelope while the link is idle, crisp notes.
@@ -150,9 +143,7 @@ What each setting does:
 
 Changes reach connected controllers on their next vibration, without restarting the game. To feel them right away, hold a controller button in the Vibration dialog.
 
-The per-player vibration strength in the Vibration dialog still applies on top. Keep it at 100 %. **Enable Accurate Vibration** makes no difference with these patches: patch 0001 removes the 15 ms filter it used to bypass, because RenHDrum paces the packets itself.
-
-### Per-game intensity and weak rumble boost (patch 0003)
+### Per-game intensity and weak rumble boost
 
 | Setting | Range | What it does |
 |---|---|---|
@@ -173,7 +164,9 @@ hd_rumble_low_boost=60
 
 With the game running, the HD Rumble dialog shows that game's values. Changes there apply right away, but write the final values into the file above to keep them.
 
-### Vibration trace (patch 0004)
+An emulator **without** this series drops these keys when it saves that game's properties: Eden-based emulators share `%APPDATA%\eden`. Avoid saving the game's properties in one, or add the keys back afterwards.
+
+### Vibration trace (patch 0002)
 
 Set `EDEN_HDRUMBLE_TRACE=1`, either in the environment or in `nx2_switches.txt` next to the emulator. Every change of a vibration value sent through command 214 is then written to `<log dir>/hdrumble_trace.csv`: time, mode, controller, low/high amplitude, low/high frequency. The file is created on the first vibration and replaced each session. It stops after 3 million lines.
 
@@ -197,13 +190,22 @@ This fits the "equalization between hardware generations" that the RenHDrum auth
 
 ---
 
+## Upstream status
+
+| Where | What |
+|---|---|
+| [zortos293/Lichii#213](https://github.com/zortos293/Lichii/pull/213) | This change (patch `0001`), proposed to Lichii |
+| [Frizti/Lichii#4](https://github.com/Frizti/Lichii/pull/4) | The same change, proposed to Frizti's Lichii |
+| [trzz1214/RenHDrum#1](https://github.com/trzz1214/RenHDrum/pull/1) | A link to this series and the Ocarina of Time findings, proposed to RenHDrum |
+
+---
+
 ## Known limitations
 
 - **Command 213 is a stub** in Eglantine and Lichii. A game that vibrates only through it stays silent; this series does not change that.
 - **Xbox One controllers:** the four-motor translation RenHDrum supports is not in this series yet. They use standard rumble.
 - **Switch 2 Pro Controller and Joy-Con 2:** not supported by RenHDrum yet.
 - **DualSense over Bluetooth** uses standard rumble. RenHDrum has Bluetooth haptics (report `0x32`), but this series does not wire it up yet.
-- **Reorganizing the code.** Most of patch `0001` lives inside `sdl_driver.cpp`. Moving it to its own file, with a CMake option and a downloaded prebuilt `renhdrum.dll`, would make it easier to carry in other forks. That is planned.
 
 ---
 
@@ -211,20 +213,21 @@ This fits the "equalization between hardware generations" that the RenHDrum auth
 
 This series is a port and extension of other people's work:
 
-- **[RenHDrum](https://github.com/trzz1214/RenHDrum)** by **Three-Dola** ([trzz1214](https://github.com/trzz1214)): the HD Rumble and DualSense haptics engine, the [SDL3 HD Rumble patches](https://github.com/trzz1214/RenHDrum/tree/main/integrations/sdl3/sdl3-patches), and the [Brontide reference patches](https://github.com/trzz1214/RenHDrum/tree/main/integrations/brontide) that patch `0001` is ported from. Their [research notebook](https://ryuhdr.threedola.workers.dev) explains the whole subject. RenHDrum in turn credits dekuNukem, the Switchbrew wiki contributors, felipearmat, rei-github, ClearlyClaire, CTCaer, Nielk1, egormanga, the SDL team and others: see [its credits](https://github.com/trzz1214/RenHDrum#research-credits--acknowledgments) and [NOTICE](https://github.com/trzz1214/RenHDrum/blob/main/NOTICE).
+- **[RenHDrum](https://github.com/trzz1214/RenHDrum)** by **Three-Dola** ([trzz1214](https://github.com/trzz1214)): the HD Rumble and DualSense haptics engine, the [SDL3 HD Rumble patches](https://github.com/trzz1214/RenHDrum/tree/main/integrations/sdl3/sdl3-patches), and the [Brontide reference patches](https://github.com/trzz1214/RenHDrum/tree/main/integrations/brontide) that patch `0001` started from. Their [research notebook](https://ryuhdr.threedola.workers.dev) explains the whole subject. RenHDrum in turn credits dekuNukem, the Switchbrew wiki contributors, felipearmat, rei-github, ClearlyClaire, CTCaer, Nielk1, egormanga, the SDL team and others: see [its credits](https://github.com/trzz1214/RenHDrum#research-credits--acknowledgments) and [NOTICE](https://github.com/trzz1214/RenHDrum/blob/main/NOTICE).
 - **neo Luigi**, for HID command 214 (`SendVibrationValuesInMode`) dispatching in [Eglantine PR #155](https://github.com/eglantine-emu/eglantine/pull/155). That is what carries Switch 2 vibration to the input layer.
 - **[Eden](https://git.eden-emu.dev/eden-emu/eden)** and the yuzu project, the emulator these trees come from.
 - **[Eglantine](https://github.com/Djihads80/Eglantine)** (Djihads80), the Switch 2 Eden fork; **[Lichii](https://github.com/zortos293/Lichii)** (zortos293); and **[Frizti/Lichii](https://github.com/Frizti/Lichii)** (Frizti), the tree this series was built and tested on.
 - **[PokeDinner](https://github.com/Franseven/PokeDinner)** by Franseven, the base of Brontide-NS2, RenHDrum's own Switch 2 testbed.
 - **[SDL](https://github.com/libsdl-org/SDL)** (Sam Lantinga, Valve and contributors).
+- **[CodeRabbit](https://coderabbit.ai)**'s review of the Lichii pull request found the Joy-Con driver conflict and the lock-ordering problems that this version fixes.
 
-The port to Lichii, the HD Rumble dialog, the per-game intensity and boost, the trace and the Ocarina of Time findings are by **[samaBR85](https://github.com/samaBR85)**, written with [Claude Code](https://claude.com/claude-code).
+The port to Lichii, the runtime-loaded layout, the HD Rumble dialog, the per-game intensity and boost, the trace and the Ocarina of Time findings are by **[samaBR85](https://github.com/samaBR85)**, written with [Claude Code](https://claude.com/claude-code).
 
 ---
 
 ## License
 
 - **The patches** modify GPL-licensed emulator code and include code ported from RenHDrum's Brontide patches (GPL-3.0-or-later). They are licensed under the **GNU General Public License v3.0 or later**; see [LICENSE](LICENSE).
-- **RenHDrum** itself is MIT OR Apache-2.0. Its **SDL3 patches**, which patch `0001` adds under `.patch/sdl3/`, are under the zlib license. Both keep their own licenses: see the [RenHDrum repository](https://github.com/trzz1214/RenHDrum).
+- **RenHDrum** itself is MIT OR Apache-2.0, including the header that patch `0001` adds as `externals/renhdrum/renhdrum.h`. Its **SDL3 patches**, which patch `0001` adds under `.patch/sdl3-hdrumble/`, are under the zlib license. Both keep their own licenses, recorded in the patch's `.reuse/dep5` entries: see the [RenHDrum repository](https://github.com/trzz1214/RenHDrum).
 
 Nintendo Switch, Joy-Con and Pro Controller are trademarks of Nintendo. PlayStation and DualSense are trademarks of Sony Interactive Entertainment. This project is not affiliated with Nintendo, Sony or the RenHDrum author. Bring your own legally dumped games and keys.
