@@ -124,7 +124,21 @@ RenHDrum HD Rumble wired: 15 ms, no-queue (written while SDL is idle), card 3 5 
 
 ### The HD Rumble dialog (patch 0002)
 
-Open it from **Emulation > Configure > Controls > Vibration: Configure > HD Rumble...**
+Open it from **Emulation > Configure > Controls > Vibration: Configure > HD Rumble...**:
+
+1. In **Controls**, click **Configure** under **Vibration**, at the bottom of the player page.
+
+   ![Controls page: the Configure button under Vibration](docs/screenshots/controls-vibration-configure.png)
+
+2. In **Configure Vibration**, click **HD Rumble...**. Keep the player's strength at 100 %; **Enable Accurate Vibration** can stay off.
+
+   ![Configure Vibration with the HD Rumble button](docs/screenshots/vibration-dialog.png)
+
+3. The HD Rumble dialog. This one was opened with Ocarina of Time running, so **Intensity** and **Weak rumble boost** show that game's own values (1000 % and 60 %).
+
+   ![The HD Rumble dialog on the DualSense page](docs/screenshots/hd-rumble-dialog.png)
+
+What each setting does:
 
 - **Enabled** turns RenHDrum on or off for every controller. Off means the emulator's standard rumble.
 - **Intensity** and **Weak rumble boost** (patch 0003) apply to all controllers. See below.
