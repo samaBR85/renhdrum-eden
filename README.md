@@ -198,6 +198,7 @@ This fits the "equalization between hardware generations" that the RenHDrum auth
 |---|---|
 | [zortos293/Lichii#213](https://github.com/zortos293/Lichii/pull/213) | This change (patch `0001`), proposed to Lichii |
 | [Frizti/Lichii#4](https://github.com/Frizti/Lichii/pull/4) | The same change, proposed to Frizti's Lichii |
+| [K-code-AI/Lichii#8](https://github.com/K-code-AI/Lichii/pull/8) | The same change, proposed to K-code's Lichii |
 | [trzz1214/RenHDrum#1](https://github.com/trzz1214/RenHDrum/pull/1) | A link to this series and the Ocarina of Time findings: **merged** as [`integrations/eden-forks`](https://github.com/trzz1214/RenHDrum/tree/main/integrations/eden-forks) |
 
 ---
