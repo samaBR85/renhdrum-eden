@@ -1,4 +1,4 @@
-From b2f99f51348c59635450cad40585f1d721c224d1 Mon Sep 17 00:00:00 2001
+From f709951a566cead2d7a6be47135bed28cf500387 Mon Sep 17 00:00:00 2001
 From: samaBR85 <sama85@gmail.com>
 Date: Thu, 5 Nov 2026 21:33:02 -0300
 Subject: [PATCH 2/2] hid: EDEN_HDRUMBLE_TRACE writes command 214 vibration

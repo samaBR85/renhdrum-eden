@@ -1,6 +1,6 @@
-From 9ed181a7b52540b80d5b28d17480db7fbc024352 Mon Sep 17 00:00:00 2001
+From 4506e1c806eeae8e8d9d19dad77bd679d668a5a2 Mon Sep 17 00:00:00 2001
 From: samaBR85 <sama85@gmail.com>
-Date: Fri, 6 Nov 2026 02:01:58 -0300
+Date: Fri, 6 Nov 2026 03:00:45 -0300
 Subject: [PATCH 1/2] input: HD Rumble and DualSense haptics through RenHDrum
 
 Plays controller vibration through RenHDrum
@@ -41,7 +41,7 @@ Feito com Claude Code
  src/common/settings.h                         |  29 +
  src/hid_core/frontend/emulated_controller.cpp |   8 +
  src/input_common/CMakeLists.txt               |  10 +
- src/input_common/drivers/renhdrum_pad.cpp     | 639 ++++++++++++++++++
+ src/input_common/drivers/renhdrum_pad.cpp     | 643 ++++++++++++++++++
  src/input_common/drivers/renhdrum_pad.h       |  56 ++
  src/input_common/drivers/sdl_driver.cpp       |  84 ++-
  src/input_common/drivers/sdl_driver.h         |   2 +-
@@ -49,7 +49,7 @@ Feito com Claude Code
  .../configuration/configure_hd_rumble.cpp     | 289 ++++++++
  src/yuzu/configuration/configure_hd_rumble.h  |  59 ++
  .../configuration/configure_vibration.cpp     |  16 +
- 18 files changed, 2059 insertions(+), 4 deletions(-)
+ 18 files changed, 2063 insertions(+), 4 deletions(-)
  create mode 100644 .patch/sdl3-hdrumble/0001-hdrumble.patch
  create mode 100644 .patch/sdl3-hdrumble/0002-hdrumble-idle-write.patch
  create mode 100644 externals/renhdrum/renhdrum.h
@@ -1057,10 +1057,10 @@ index 840602f4ce..4c7f5efc39 100644
 +endif()
 diff --git a/src/input_common/drivers/renhdrum_pad.cpp b/src/input_common/drivers/renhdrum_pad.cpp
 new file mode 100644
-index 0000000000..63560e60b2
+index 0000000000..ed0219e9d6
 --- /dev/null
 +++ b/src/input_common/drivers/renhdrum_pad.cpp
-@@ -0,0 +1,639 @@
+@@ -0,0 +1,643 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -1395,6 +1395,10 @@ index 0000000000..63560e60b2
 +                audio_stream = stream;
 +                audio_inited = true;
 +                opened = true;
++                // Start only once published: from here on, the DSP is replaced or freed only
++                // under SDL_LockAudioStream or after SDL_DestroyAudioStream. The callback never
++                // takes `mutex`.
++                SDL_ResumeAudioStreamDevice(stream);
 +            }
 +        }
 +        if (!opened) {
@@ -1416,8 +1420,9 @@ index 0000000000..63560e60b2
 +        }
 +    }
 +
-+    /// Finds the DualSense audio device and opens a playing stream on it, or nullptr. Called
-+    /// without the mutex, with the SDL audio subsystem initialized.
++    /// Finds the DualSense audio device and opens a stream on it, paused until it is published
++    /// in `audio_stream`, or nullptr. Called without the mutex, with the SDL audio subsystem
++    /// initialized.
 +    SDL_AudioStream* OpenDualSenseAudioStream(SDL_Joystick* js) {
 +        if (SDL_GetJoystickConnectionState(js) == SDL_JOYSTICK_CONNECTION_WIRELESS) {
 +            std::scoped_lock lock{mutex};
@@ -1457,7 +1462,6 @@ index 0000000000..63560e60b2
 +                        SDL_GetError());
 +            return nullptr;
 +        }
-+        SDL_ResumeAudioStreamDevice(stream);
 +        LOG_INFO(Input, "RenHDrum: DualSense haptics on \"{}\"", SDL_GetAudioDeviceName(matched));
 +        return stream;
 +    }
