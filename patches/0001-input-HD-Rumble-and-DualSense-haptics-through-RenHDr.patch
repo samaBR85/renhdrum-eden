@@ -1,4 +1,4 @@
-From 59e0570d3f4979fea7abb9ae571df6c3e05206ef Mon Sep 17 00:00:00 2001
+From 5fbfc3c2683d3d9054114640b45a536d787b6dcd Mon Sep 17 00:00:00 2001
 From: samaBR85 <sama85@gmail.com>
 Date: Fri, 6 Nov 2026 03:47:58 -0300
 Subject: [PATCH 1/2] input: HD Rumble and DualSense haptics through RenHDrum
@@ -41,15 +41,15 @@ Feito com Claude Code
  src/common/settings.h                         |   38 +
  src/hid_core/frontend/emulated_controller.cpp |    8 +
  src/input_common/CMakeLists.txt               |   10 +
- src/input_common/drivers/renhdrum_pad.cpp     | 1053 +++++++++++++++++
- src/input_common/drivers/renhdrum_pad.h       |   64 +
- src/input_common/drivers/sdl_driver.cpp       |   84 +-
+ src/input_common/drivers/renhdrum_pad.cpp     | 1090 +++++++++++++++++
+ src/input_common/drivers/renhdrum_pad.h       |   68 +
+ src/input_common/drivers/sdl_driver.cpp       |  168 ++-
  src/input_common/drivers/sdl_driver.h         |    2 +-
  src/yuzu/CMakeLists.txt                       |   20 +
- .../configuration/configure_hd_rumble.cpp     |  395 +++++++
+ .../configuration/configure_hd_rumble.cpp     |  426 +++++++
  src/yuzu/configuration/configure_hd_rumble.h  |   73 ++
  .../configuration/configure_vibration.cpp     |   16 +
- 18 files changed, 2629 insertions(+), 4 deletions(-)
+ 18 files changed, 2749 insertions(+), 40 deletions(-)
  create mode 100644 .patch/sdl3-hdrumble/0001-hdrumble.patch
  create mode 100644 .patch/sdl3-hdrumble/0002-hdrumble-idle-write.patch
  create mode 100644 externals/renhdrum/renhdrum.h
@@ -1082,10 +1082,10 @@ index 840602f4ce..4c7f5efc39 100644
 +endif()
 diff --git a/src/input_common/drivers/renhdrum_pad.cpp b/src/input_common/drivers/renhdrum_pad.cpp
 new file mode 100644
-index 0000000000..47d2e88641
+index 0000000000..4367ca6bb5
 --- /dev/null
 +++ b/src/input_common/drivers/renhdrum_pad.cpp
-@@ -0,0 +1,1053 @@
+@@ -0,0 +1,1090 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -1200,6 +1200,7 @@ index 0000000000..47d2e88641
 +
 +constexpr Uint16 NintendoVendorId = 0x057E;
 +constexpr Uint16 SonyVendorId = 0x054C;
++constexpr Uint16 MicrosoftVendorId = 0x045E;
 +constexpr std::array<Uint8, 10> NeutralPacket{0x10, 0, 0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40};
 +constexpr int DualSenseAudioMaxAttempts = 10;
 +// SDL no-queue gap while the 5 ms envelope runs (Ryuhdr AmFmNoQueueGapMs)
@@ -1212,12 +1213,24 @@ index 0000000000..47d2e88641
 +/// Xbox One / Series and Xbox 360 style pads, Microsoft's or not (GameSir, 8BitDo, PowerA...).
 +/// RenHDrum's converter was tuned on an Xbox One S; others get the same four-motor mix, and
 +/// a pad whose path has no trigger motors (XInput) keeps only the grips.
-+bool IsXboxStyle(SDL_Gamepad* gamepad) {
-+    if (!gamepad) {
-+        return false;
++bool IsXboxStyle(SDL_Joystick* joystick, SDL_Gamepad* gamepad) {
++    if (gamepad) {
++        const SDL_GamepadType type = SDL_GetGamepadType(gamepad);
++        if (type == SDL_GAMEPAD_TYPE_XBOXONE || type == SDL_GAMEPAD_TYPE_XBOX360) {
++            return true;
++        }
 +    }
-+    const SDL_GamepadType type = SDL_GetGamepadType(gamepad);
-+    return type == SDL_GAMEPAD_TYPE_XBOXONE || type == SDL_GAMEPAD_TYPE_XBOX360;
++#ifdef _WIN32
++    // With raw input on, SDL types a third-party XInput pad by its vendor ID and may not call it
++    // an Xbox controller. Windows marks every XInput-capable HID device with "IG_" in its path.
++    const char* path = SDL_GetJoystickPath(joystick);
++    if (path && (std::strstr(path, "IG_") != nullptr || std::strstr(path, "ig_") != nullptr)) {
++        return true;
++    }
++#else
++    (void)joystick;
++#endif
++    return false;
 +}
 +
 +bool IsDualSense(Uint16 vid, Uint16 pid) {
@@ -1296,6 +1309,8 @@ index 0000000000..47d2e88641
 +std::atomic<int> last_connected_kind{-1};
 +// Connected Xbox-style controllers that expose trigger motors
 +std::atomic<int> xbox_trigger_pads{};
++// Connected official (Microsoft) Xbox controllers whose trigger motors SDL does not expose
++std::atomic<int> xbox_official_no_triggers{};
 +
 +} // namespace
 +
@@ -1326,6 +1341,7 @@ index 0000000000..47d2e88641
 +
 +    RenHdcXboxRumble* xbox{};
 +    bool xbox_triggers{};
++    bool official_no_triggers{};
 +    // Direct mode: the latest shaped bands of each side, and the grip values last sent
 +    std::array<float, 2> direct_low{};
 +    std::array<float, 2> direct_high{};
@@ -1757,8 +1773,10 @@ index 0000000000..47d2e88641
 +    const bool switch_pad = IsSwitchHdController(vid, pid);
 +    const auto& api_check = Api();
 +    const bool xbox_pad = !switch_pad && !IsDualSense(vid, pid) && api_check.HasXbox() &&
-+                          IsXboxStyle(gamepad);
++                          IsXboxStyle(joystick, gamepad);
 +    if (!switch_pad && !xbox_pad && !IsDualSense(vid, pid)) {
++        LOG_INFO(Input, "RenHDrum: {:04X}:{:04X} \"{}\" is not a controller RenHDrum drives",
++                 vid, pid, SDL_GetJoystickName(joystick) ? SDL_GetJoystickName(joystick) : "");
 +        return nullptr;
 +    }
 +
@@ -1806,6 +1824,10 @@ index 0000000000..47d2e88641
 +    if (state->xbox_triggers) {
 +        ++xbox_trigger_pads;
 +    }
++    state->official_no_triggers = xbox_pad && vid == MicrosoftVendorId && !state->xbox_triggers;
++    if (state->official_no_triggers) {
++        ++xbox_official_no_triggers;
++    }
 +    last_connected_kind = state->kind;
 +    return std::shared_ptr<RenHDrumPad>(new RenHDrumPad(std::move(state)));
 +}
@@ -1828,6 +1850,14 @@ index 0000000000..47d2e88641
 +        return -1;
 +    }
 +    return xbox_trigger_pads.load() > 0 ? 1 : 0;
++}
++
++bool GetRenHDrumXboxNeedsRawInput() {
++#ifdef _WIN32
++    return xbox_official_no_triggers.load() > 0;
++#else
++    return false;
++#endif
 +}
 +
 +RenHDrumPad::RenHDrumPad(std::unique_ptr<Impl> impl_) : impl{std::move(impl_)} {}
@@ -1853,6 +1883,9 @@ index 0000000000..47d2e88641
 +            --connected_count[impl->kind];
 +            if (impl->xbox_triggers) {
 +                --xbox_trigger_pads;
++            }
++            if (impl->official_no_triggers) {
++                --xbox_official_no_triggers;
 +            }
 +            impl->kind = -1;
 +        }
@@ -2119,6 +2152,10 @@ index 0000000000..47d2e88641
 +    return -1;
 +}
 +
++bool GetRenHDrumXboxNeedsRawInput() {
++    return false;
++}
++
 +struct RenHDrumPad::Impl {};
 +
 +std::shared_ptr<RenHDrumPad> RenHDrumPad::Create(SDL_Joystick*, SDL_Gamepad*) {
@@ -2141,10 +2178,10 @@ index 0000000000..47d2e88641
 +#endif // ENABLE_RENHDRUM
 diff --git a/src/input_common/drivers/renhdrum_pad.h b/src/input_common/drivers/renhdrum_pad.h
 new file mode 100644
-index 0000000000..47d4e2109e
+index 0000000000..8b473845da
 --- /dev/null
 +++ b/src/input_common/drivers/renhdrum_pad.h
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,68 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -2173,6 +2210,10 @@ index 0000000000..47d4e2109e
 +/// For connected Xbox-style controllers: 1 when one exposes trigger motors, 0 when none does,
 +/// -1 when no Xbox-style controller is connected.
 +int GetRenHDrumXboxTriggers();
++
++/// True when an official Xbox controller is connected but its trigger motors are out of reach:
++/// on Windows SDL drives them only through raw input ("Enable XInput 8 player support").
++bool GetRenHDrumXboxNeedsRawInput();
 +
 +/**
 + * Vibration for one SDL controller through RenHDrum (https://github.com/trzz1214/RenHDrum):
@@ -2210,7 +2251,7 @@ index 0000000000..47d4e2109e
 +
 +} // namespace InputCommon
 diff --git a/src/input_common/drivers/sdl_driver.cpp b/src/input_common/drivers/sdl_driver.cpp
-index a308554071..0e883ddca5 100644
+index a308554071..05cb0ace72 100644
 --- a/src/input_common/drivers/sdl_driver.cpp
 +++ b/src/input_common/drivers/sdl_driver.cpp
 @@ -5,13 +5,16 @@
@@ -2230,12 +2271,22 @@ index a308554071..0e883ddca5 100644
  #include "input_common/drivers/sdl_driver.h"
  
  namespace InputCommon {
-@@ -92,6 +95,13 @@ public:
+@@ -87,11 +90,20 @@ static bool SDLEventWatcher(void* user_data, SDL_Event* event) {
+ 
+ class SDLJoystick {
+ public:
++    // The RenHDrum pad is created by the caller before it takes the joystick map lock: creating
++    // it calls into SDL, and SDL's controller thread can hold the SDL joystick lock while it waits
++    // for the map lock (raw input).
+     SDLJoystick(Common::UUID guid_, int port_, SDL_Joystick* joystick,
+-                                SDL_Gamepad* game_controller)
++                                SDL_Gamepad* game_controller,
++                                std::shared_ptr<RenHDrumPad> renhdrum_pad = nullptr)
                  : guid{guid_}, port{port_}, sdl_joystick{joystick, &SDL_CloseJoystick},
-                     sdl_controller{game_controller, &SDL_CloseGamepad} {
-         EnableMotion();
-+        renhdrum = RenHDrumPad::Create(joystick, game_controller);
-+    }
+-                    sdl_controller{game_controller, &SDL_CloseGamepad} {
+-        EnableMotion();
++                    sdl_controller{game_controller, &SDL_CloseGamepad},
++                    renhdrum{std::move(renhdrum_pad)} {}
 +
 +    ~SDLJoystick() {
 +        if (renhdrum) {
@@ -2244,7 +2295,7 @@ index a308554071..0e883ddca5 100644
      }
  
      void EnableMotion() {
-@@ -233,6 +243,10 @@ public:
+@@ -233,6 +245,10 @@ public:
      }
  
      bool HasHDRumble() const {
@@ -2255,10 +2306,13 @@ index a308554071..0e883ddca5 100644
          constexpr Uint16 valve_vendor_id = 0x28DE;
          const auto is_known_hd_type = [](SDL_GamepadType type) {
              return type == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO ||
-@@ -306,8 +320,25 @@ public:
+@@ -305,9 +321,26 @@ public:
+         return sdl_controller.get();
      }
  
-     void SetSDLJoystick(SDL_Joystick* joystick, SDL_Gamepad* controller) {
+-    void SetSDLJoystick(SDL_Joystick* joystick, SDL_Gamepad* controller) {
++    void SetSDLJoystick(SDL_Joystick* joystick, SDL_Gamepad* controller,
++                        std::shared_ptr<RenHDrumPad> new_pad = nullptr) {
 +        std::shared_ptr<RenHDrumPad> old_pad;
 +        {
 +            std::scoped_lock lock{renhdrum_mutex};
@@ -2269,7 +2323,6 @@ index a308554071..0e883ddca5 100644
 +        }
          sdl_joystick.reset(joystick);
          sdl_controller.reset(controller);
-+        auto new_pad = RenHDrumPad::Create(joystick, controller);
 +        std::scoped_lock lock{renhdrum_mutex};
 +        renhdrum = std::move(new_pad);
 +    }
@@ -2281,7 +2334,7 @@ index a308554071..0e883ddca5 100644
      }
  
      bool IsJoyconLeft() const {
-@@ -406,6 +437,9 @@ private:
+@@ -406,6 +439,9 @@ private:
      std::unique_ptr<SDL_Gamepad, decltype(&SDL_CloseGamepad)> sdl_controller;
      mutable std::mutex mutex;
  
@@ -2291,7 +2344,78 @@ index a308554071..0e883ddca5 100644
      u64 last_motion_update{};
      static constexpr std::size_t InitialMotionRestartThreshold = 200;
      static constexpr std::size_t MaxMotionRestartThreshold = 200 * 64;
-@@ -588,8 +622,32 @@ void SDLDriver::CloseJoystick(SDL_Joystick* sdl_joystick) {
+@@ -538,37 +574,40 @@ void SDLDriver::InitJoystick(SDL_JoystickID joystick_id) {
+         }
+     }
+ 
+-    std::scoped_lock lock{joystick_map_mutex};
+-    if (joystick_map.find(guid) == joystick_map.end()) {
+-        auto joystick = std::make_shared<SDLJoystick>(guid, 0, sdl_joystick, sdl_gamecontroller);
+-        PreSetController(joystick->GetPadIdentifier());
+-        joystick->EnableMotion();
+-        SetBattery(joystick->GetPadIdentifier(),
+-                   joystick->GetBatteryLevel(battery_state, battery_percent));
+-        joystick_map[guid].emplace_back(std::move(joystick));
+-        return;
+-    }
+-
+-    auto& joystick_guid_list = joystick_map[guid];
+-    const auto joystick_it =
+-        std::find_if(joystick_guid_list.begin(), joystick_guid_list.end(),
+-                     [](const auto& joystick) { return !joystick->GetSDLJoystick(); });
+-
+-    if (joystick_it != joystick_guid_list.end()) {
+-        (*joystick_it)->SetSDLJoystick(sdl_joystick, sdl_gamecontroller);
+-        (*joystick_it)->EnableMotion();
+-        SetBattery((*joystick_it)->GetPadIdentifier(),
+-                   (*joystick_it)->GetBatteryLevel(battery_state, battery_percent));
+-        return;
++    // Outside the map lock, see SDLJoystick
++    auto renhdrum_pad = RenHDrumPad::Create(sdl_joystick, sdl_gamecontroller);
++
++    // Motion sensors are switched on after the map lock is released, for the same reason
++    std::shared_ptr<SDLJoystick> added;
++    {
++        std::scoped_lock lock{joystick_map_mutex};
++        if (joystick_map.find(guid) == joystick_map.end()) {
++            added = std::make_shared<SDLJoystick>(guid, 0, sdl_joystick, sdl_gamecontroller,
++                                                  std::move(renhdrum_pad));
++            PreSetController(added->GetPadIdentifier());
++            SetBattery(added->GetPadIdentifier(),
++                       added->GetBatteryLevel(battery_state, battery_percent));
++            joystick_map[guid].emplace_back(added);
++        } else {
++            auto& joystick_guid_list = joystick_map[guid];
++            const auto joystick_it =
++                std::find_if(joystick_guid_list.begin(), joystick_guid_list.end(),
++                             [](const auto& joystick) { return !joystick->GetSDLJoystick(); });
++            if (joystick_it != joystick_guid_list.end()) {
++                added = *joystick_it;
++                added->SetSDLJoystick(sdl_joystick, sdl_gamecontroller, std::move(renhdrum_pad));
++            } else {
++                const int port = static_cast<int>(joystick_guid_list.size());
++                added = std::make_shared<SDLJoystick>(guid, port, sdl_joystick,
++                                                      sdl_gamecontroller, std::move(renhdrum_pad));
++                PreSetController(added->GetPadIdentifier());
++                joystick_guid_list.emplace_back(added);
++            }
++            SetBattery(added->GetPadIdentifier(),
++                       added->GetBatteryLevel(battery_state, battery_percent));
++        }
+     }
+-
+-    const int port = static_cast<int>(joystick_guid_list.size());
+-    auto joystick = std::make_shared<SDLJoystick>(guid, port, sdl_joystick, sdl_gamecontroller);
+-    PreSetController(joystick->GetPadIdentifier());
+-    joystick->EnableMotion();
+-    SetBattery(joystick->GetPadIdentifier(),
+-               joystick->GetBatteryLevel(battery_state, battery_percent));
+-    joystick_guid_list.emplace_back(std::move(joystick));
++    added->EnableMotion();
+ }
+ 
+ void SDLDriver::CloseJoystick(SDL_Joystick* sdl_joystick) {
+@@ -588,8 +627,32 @@ void SDLDriver::CloseJoystick(SDL_Joystick* sdl_joystick) {
  }
  
  void SDLDriver::PumpEvents() const {
@@ -2326,7 +2450,25 @@ index a308554071..0e883ddca5 100644
      }
  }
  
-@@ -789,6 +847,18 @@ Common::Input::DriverResult SDLDriver::SetVibration(
+@@ -656,8 +719,15 @@ void SDLDriver::HandleGameControllerEvent(const SDL_Event& event) {
+ }
+ 
+ void SDLDriver::CloseJoysticks() {
+-    std::scoped_lock lock{joystick_map_mutex};
+-    joystick_map.clear();
++    // Destroyed after the map lock is released: a RenHDrum pad stops its rumble through SDL on
++    // shutdown, and SDL's controller thread can hold the SDL joystick lock while it waits for
++    // the map lock.
++    decltype(joystick_map) closing;
++    {
++        std::scoped_lock lock{joystick_map_mutex};
++        closing.swap(joystick_map);
++    }
++    closing.clear();
+ }
+ 
+ SDLDriver::SDLDriver(std::string input_engine_) : InputEngine(std::move(input_engine_)) {
+@@ -789,6 +859,18 @@ Common::Input::DriverResult SDLDriver::SetVibration(
      const PadIdentifier& identifier, const Common::Input::VibrationStatus& vibration) {
      const auto joystick =
          GetSDLJoystickByGUID(identifier.guid.RawString(), static_cast<int>(identifier.port));
@@ -2345,7 +2487,7 @@ index a308554071..0e883ddca5 100644
      const auto process_amplitude_exp = [](f32 amplitude, f32 factor) {
          return (amplitude + std::pow(amplitude, factor)) * 0.5f * 0xFFFF;
      };
-@@ -839,10 +909,20 @@ bool SDLDriver::IsVibrationEnabled(const PadIdentifier& identifier) {
+@@ -839,10 +921,20 @@ bool SDLDriver::IsVibrationEnabled(const PadIdentifier& identifier) {
          .type = Common::Input::VibrationAmplificationType::Exponential,
      };
  
@@ -2416,10 +2558,10 @@ index 2052b63394..da57cc2efc 100644
 +endif()
 diff --git a/src/yuzu/configuration/configure_hd_rumble.cpp b/src/yuzu/configuration/configure_hd_rumble.cpp
 new file mode 100644
-index 0000000000..e5620b0f8d
+index 0000000000..05263e3430
 --- /dev/null
 +++ b/src/yuzu/configuration/configure_hd_rumble.cpp
-@@ -0,0 +1,395 @@
+@@ -0,0 +1,426 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -2432,7 +2574,9 @@ index 0000000000..e5620b0f8d
 +#include <QGroupBox>
 +#include <QHBoxLayout>
 +#include <QLabel>
++#include <QApplication>
 +#include <QListWidget>
++#include <QMessageBox>
 +#include <QPushButton>
 +#include <QSlider>
 +#include <QSpinBox>
@@ -2711,6 +2855,35 @@ index 0000000000..e5620b0f8d
 +    xbox_no_triggers->setVisible(xbox_triggers_state == 0);
 +    form->addRow(QString{}, xbox_no_triggers);
 +    layout->addWidget(group);
++
++    // An official Xbox controller whose trigger motors are out of reach: offer the one setting
++    // that reaches them, where the user is setting up the vibration
++    if (InputCommon::GetRenHDrumXboxNeedsRawInput() && !Settings::values.enable_raw_input.GetValue()) {
++        auto* raw_box = new QWidget;
++        auto* raw_row = new QHBoxLayout(raw_box);
++        raw_row->setContentsMargins(0, 0, 0, 0);
++        auto* raw_note = new QLabel(tr("Trigger rumble needs \"XInput 8 player support\"."));
++        raw_note->setWordWrap(true);
++        auto* raw_button = new QPushButton(tr("Turn it on"));
++        raw_row->addWidget(raw_note, 1);
++        raw_row->addWidget(raw_button);
++        layout->addWidget(raw_box);
++        connect(raw_button, &QPushButton::clicked, this, [this, raw_box] {
++            Settings::values.enable_raw_input.SetValue(true);
++            // Keep the Controls > Advanced checkbox in step, or its OK would undo this
++            for (QWidget* top : QApplication::topLevelWidgets()) {
++                if (auto* box = top->findChild<QCheckBox*>(QStringLiteral("enable_raw_input"))) {
++                    box->setChecked(true);
++                }
++            }
++            raw_box->setVisible(false);
++            QMessageBox::information(
++                this, tr("HD Rumble"),
++                tr("Turned on. Restart the emulator to feel the triggers.\n\nWhile this is on, "
++                   "games can't open their web pages (some manuals and logins). You can turn it "
++                   "off in Controls > Advanced."));
++        });
++    }
 +
 +    layout->addWidget(MakeNote(tr("Trigger rumble works only with official Xbox controllers. "
 +                                  "Most wireless receivers drive just the grip motors.")));

@@ -147,7 +147,7 @@ What each setting does:
   - **Wired:** packet interval (15 ms is the console's rate), 5 ms envelope, frequency changes inside a packet, crisp notes.
   - **Bluetooth:** level 1 Stable / 2 Balanced / 3 Quality (60 / 45 / 35 ms), send right after an input report, 5 ms envelope while the link is idle, crisp notes.
 - **DualSense:** use the voice coils, volume, crisp notes.
-- **Xbox:** on/off, mode (RenHDrum or Direct), motor strength, and in Direct mode detail on main motor, hit accents and trigger rumble (disabled, with a note, on a controller without trigger motors). On a GameSir G7 Pro on its receiver, Direct with motor strength around 25% works well. On an Xbox Series controller over USB: Direct, motor strength 20%, detail 50%, hit accents 50%, trigger rumble 20%.
+- **Xbox:** on/off, mode (RenHDrum or Direct), motor strength, and in Direct mode detail on main motor, hit accents and trigger rumble (disabled, with a note, on a controller without trigger motors). Starting points: for a third-party pad on a 2.4 GHz receiver (XInput, grip motors only; tested with a GameSir G7 Pro), Direct with motor strength around 25%; for an official Xbox controller over USB (tested with an Xbox Series controller), Direct with motor strength 20%, detail 50%, hit accents 50% and trigger rumble 20%. With an official controller whose trigger motors are out of reach, the page offers a one-click *Turn it on* for *Enable XInput 8 player support*.
 - The dialog opens on the page of the controller in use, marked "(connected)".
 - **Restore Defaults** goes back to RenHDrum's recommended mode.
 
@@ -215,7 +215,7 @@ This fits the "equalization between hardware generations" that the RenHDrum auth
 ## Known limitations
 
 - **Command 213 is a stub** in Eglantine and Lichii. A game that vibrates only through it stays silent; this series does not change that.
-- **Xbox controllers** were tested on a GameSir G7 Pro through its 2.4 GHz receiver (XInput, grip motors only) and an Xbox Series controller over USB (trigger motors with *Enable XInput 8 player support* on). That option disables the web applet; without it, only the grip motors play.
+- **Xbox controllers:** trigger motors need *Enable XInput 8 player support* (raw input) on Windows; third-party XInput pads and receivers drive only the grip motors. Tested with a GameSir G7 Pro on its receiver and an Xbox Series controller over USB. With raw input on, an earlier version could hang at start or close; the series now avoids SDL calls under the SDL driver's joystick map lock. That option disables the web applet; without it, only the grip motors play.
 - **Switch 2 Pro Controller and Joy-Con 2:** not supported by RenHDrum yet.
 
 ---
