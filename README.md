@@ -22,7 +22,7 @@ Switch and Switch 2 games describe vibration as two bands (low and high), each w
 | Nintendo Switch Pro Controller, Joy-Con | USB or Bluetooth | Real HD Rumble packets: 5 ms AM/FM envelope, frequency changes inside a packet, "crisp notes" (stronger attack, softer sustain), Bluetooth pacing that keeps input lag down |
 | Sony DualSense / DualSense Edge | USB | The vibration played as 4-channel 48 kHz audio on the controller's haptic voice coils, the most detailed rumble available on PC |
 | Sony DualSense / DualSense Edge | Bluetooth | The same voice-coil haptics, sent as HID output report `0x32` every 10.667 ms while the game vibrates. Needs RenHDrum 0.2.1 or newer; an older DLL keeps the standard rumble. |
-| Xbox One / Series / 360 style, any brand | USB, Bluetooth or receiver | **RenHDrum** mode: RenHDrum's four-motor converter, tuned on the Xbox One S. **Direct** mode: full motor power for pads with weaker motors, with detail on the main motor and hit accents. Trigger motors only where SDL exposes them (official pads through Windows' Xbox driver). Needs RenHDrum 0.2.0 or newer. |
+| Xbox One / Series / 360 style, any brand | USB, Bluetooth or receiver | **RenHDrum** mode: RenHDrum's four-motor converter, tuned on the Xbox One S. **Direct** mode: full motor power for pads with weaker motors, with detail on the main motor, hit accents and, on pads with trigger motors, the fine vibration on LT/RT. Trigger motors only where SDL exposes them: official pads through Windows' Xbox driver, with the emulator's *Enable XInput 8 player support* on. Needs RenHDrum 0.2.0 or newer. |
 | Other controllers | any | Standard rumble (unchanged) |
 
 RenHDrum is a separate library, `renhdrum.dll`, that the emulator **loads at runtime**. If it is not next to the emulator, nothing changes: every controller keeps the standard rumble.
@@ -147,7 +147,7 @@ What each setting does:
   - **Wired:** packet interval (15 ms is the console's rate), 5 ms envelope, frequency changes inside a packet, crisp notes.
   - **Bluetooth:** level 1 Stable / 2 Balanced / 3 Quality (60 / 45 / 35 ms), send right after an input report, 5 ms envelope while the link is idle, crisp notes.
 - **DualSense:** use the voice coils, volume, crisp notes.
-- **Xbox:** on/off, mode (RenHDrum or Direct), motor strength, and in Direct mode detail on main motor and hit accents. On a pad with weak motors, such as a GameSir G7 Pro on its receiver, Direct with motor strength around 25% works well.
+- **Xbox:** on/off, mode (RenHDrum or Direct), motor strength, and in Direct mode detail on main motor, hit accents and trigger rumble (disabled, with a note, on a controller without trigger motors). On a GameSir G7 Pro on its receiver, Direct with motor strength around 25% works well. On an Xbox Series controller over USB: Direct, motor strength 20%, detail 50%, hit accents 50%, trigger rumble 20%.
 - The dialog opens on the page of the controller in use, marked "(connected)".
 - **Restore Defaults** goes back to RenHDrum's recommended mode.
 
@@ -207,7 +207,7 @@ This fits the "equalization between hardware generations" that the RenHDrum auth
 |---|---|
 | [zortos293/Lichii#213](https://github.com/zortos293/Lichii/pull/213) | This change (patch `0001`), proposed to Lichii |
 | [Frizti/Lichii#4](https://github.com/Frizti/Lichii/pull/4) | The same change, proposed to Frizti's Lichii |
-| [K-code-AI/Greenhat-Lichii#8](https://github.com/K-code-AI/Greenhat-Lichii/pull/8), [#10](https://github.com/K-code-AI/Greenhat-Lichii/pull/10) | **Merged** into K-code's Greenhat-Lichii (formerly K-code-AI/Lichii): HD Rumble, DualSense wired and Bluetooth. Xbox support proposed in [#18](https://github.com/K-code-AI/Greenhat-Lichii/pull/18) |
+| [K-code-AI/Greenhat-Lichii#8](https://github.com/K-code-AI/Greenhat-Lichii/pull/8), [#10](https://github.com/K-code-AI/Greenhat-Lichii/pull/10) | **Merged** into K-code's Greenhat-Lichii (formerly K-code-AI/Lichii): HD Rumble, DualSense wired and Bluetooth, and Xbox support ([#18](https://github.com/K-code-AI/Greenhat-Lichii/pull/18)). Trigger rumble proposed in [#20](https://github.com/K-code-AI/Greenhat-Lichii/pull/20) |
 | [trzz1214/RenHDrum#1](https://github.com/trzz1214/RenHDrum/pull/1) | A link to this series and the Ocarina of Time findings: **merged** as [`integrations/eden-forks`](https://github.com/trzz1214/RenHDrum/tree/main/integrations/eden-forks) |
 
 ---
@@ -215,7 +215,7 @@ This fits the "equalization between hardware generations" that the RenHDrum auth
 ## Known limitations
 
 - **Command 213 is a stub** in Eglantine and Lichii. A game that vibrates only through it stays silent; this series does not change that.
-- **Xbox controllers** were tested only on a GameSir G7 Pro through its 2.4 GHz receiver (XInput, grip motors only). Official Xbox pads and their trigger motors are untested.
+- **Xbox controllers** were tested on a GameSir G7 Pro through its 2.4 GHz receiver (XInput, grip motors only) and an Xbox Series controller over USB (trigger motors with *Enable XInput 8 player support* on). That option disables the web applet; without it, only the grip motors play.
 - **Switch 2 Pro Controller and Joy-Con 2:** not supported by RenHDrum yet.
 
 ---

@@ -1,4 +1,4 @@
-From b2427d008b66b1bee0e8efb6b8072327942e6552 Mon Sep 17 00:00:00 2001
+From 59e0570d3f4979fea7abb9ae571df6c3e05206ef Mon Sep 17 00:00:00 2001
 From: samaBR85 <sama85@gmail.com>
 Date: Fri, 6 Nov 2026 03:47:58 -0300
 Subject: [PATCH 1/2] input: HD Rumble and DualSense haptics through RenHDrum
@@ -31,25 +31,25 @@ Based on RenHDrum's Brontide reference patches by Three-Dola
 
 Feito com Claude Code
 ---
- .patch/sdl3-hdrumble/0001-hdrumble.patch      |  50 +
- .../0002-hdrumble-idle-write.patch            | 486 +++++++++
- .reuse/dep5                                   |  10 +
- CMakeLists.txt                                |  12 +
- cpmfile.json                                  |  11 +
- externals/CMakeLists.txt                      |   7 +-
- externals/renhdrum/renhdrum.h                 | 294 ++++++
- src/common/settings.h                         |  36 +
- src/hid_core/frontend/emulated_controller.cpp |   8 +
- src/input_common/CMakeLists.txt               |  10 +
- src/input_common/drivers/renhdrum_pad.cpp     | 992 ++++++++++++++++++
- src/input_common/drivers/renhdrum_pad.h       |  60 ++
- src/input_common/drivers/sdl_driver.cpp       |  84 +-
- src/input_common/drivers/sdl_driver.h         |   2 +-
- src/yuzu/CMakeLists.txt                       |  20 +
- .../configuration/configure_hd_rumble.cpp     | 380 +++++++
- src/yuzu/configuration/configure_hd_rumble.h  |  69 ++
- .../configuration/configure_vibration.cpp     |  16 +
- 18 files changed, 2543 insertions(+), 4 deletions(-)
+ .patch/sdl3-hdrumble/0001-hdrumble.patch      |   50 +
+ .../0002-hdrumble-idle-write.patch            |  486 ++++++++
+ .reuse/dep5                                   |   10 +
+ CMakeLists.txt                                |   12 +
+ cpmfile.json                                  |   11 +
+ externals/CMakeLists.txt                      |    7 +-
+ externals/renhdrum/renhdrum.h                 |  294 +++++
+ src/common/settings.h                         |   38 +
+ src/hid_core/frontend/emulated_controller.cpp |    8 +
+ src/input_common/CMakeLists.txt               |   10 +
+ src/input_common/drivers/renhdrum_pad.cpp     | 1053 +++++++++++++++++
+ src/input_common/drivers/renhdrum_pad.h       |   64 +
+ src/input_common/drivers/sdl_driver.cpp       |   84 +-
+ src/input_common/drivers/sdl_driver.h         |    2 +-
+ src/yuzu/CMakeLists.txt                       |   20 +
+ .../configuration/configure_hd_rumble.cpp     |  395 +++++++
+ src/yuzu/configuration/configure_hd_rumble.h  |   73 ++
+ .../configuration/configure_vibration.cpp     |   16 +
+ 18 files changed, 2629 insertions(+), 4 deletions(-)
  create mode 100644 .patch/sdl3-hdrumble/0001-hdrumble.patch
  create mode 100644 .patch/sdl3-hdrumble/0002-hdrumble-idle-write.patch
  create mode 100644 externals/renhdrum/renhdrum.h
@@ -988,10 +988,10 @@ index 0000000000..cd92ef16b6
 +
 +#endif /* RENHDRUM_H */
 diff --git a/src/common/settings.h b/src/common/settings.h
-index e5f5029dc9..323a6251e1 100644
+index e5f5029dc9..edcc18e0d3 100644
 --- a/src/common/settings.h
 +++ b/src/common/settings.h
-@@ -817,6 +817,42 @@ struct Values {
+@@ -817,6 +817,44 @@ struct Values {
      SwitchableSetting<bool> enable_accurate_vibrations{linkage, false, "enable_accurate_vibrations",
                                                         Category::Controls};
  
@@ -1030,6 +1030,8 @@ index e5f5029dc9..323a6251e1 100644
 +    // Direct mode: share of the high band added to the big motor, and the kick on a sudden rise
 +    Setting<int> xbox_detail_mix{linkage, 50, "xbox_detail_mix", Category::Controls};
 +    Setting<int> xbox_hit_accents{linkage, 50, "xbox_hit_accents", Category::Controls};
++    // Direct mode: share of the high band sent to the trigger motors (left side LT, right RT)
++    Setting<int> xbox_trigger_mix{linkage, 20, "xbox_trigger_mix", Category::Controls};
 +
      SwitchableSetting<bool> motion_enabled{linkage, true, "motion_enabled", Category::Controls};
      Setting<std::string> udp_input_servers{linkage, "127.0.0.1:26760", "udp_input_servers",
@@ -1080,10 +1082,10 @@ index 840602f4ce..4c7f5efc39 100644
 +endif()
 diff --git a/src/input_common/drivers/renhdrum_pad.cpp b/src/input_common/drivers/renhdrum_pad.cpp
 new file mode 100644
-index 0000000000..aeb5152a19
+index 0000000000..47d2e88641
 --- /dev/null
 +++ b/src/input_common/drivers/renhdrum_pad.cpp
-@@ -0,0 +1,992 @@
+@@ -0,0 +1,1053 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -1240,6 +1242,7 @@ index 0000000000..aeb5152a19
 +    bool xbox_direct{false};
 +    int xbox_detail_mix{50};
 +    int xbox_hit_accents{50};
++    int xbox_trigger_mix{20};
 +    int gain{100};
 +    int low_boost{0};
 +    bool operator==(const UserSettings&) const = default;
@@ -1265,6 +1268,7 @@ index 0000000000..aeb5152a19
 +        .xbox_direct = s.xbox_rumble_mode.GetValue() == 1,
 +        .xbox_detail_mix = std::clamp(s.xbox_detail_mix.GetValue(), 0, 100),
 +        .xbox_hit_accents = std::clamp(s.xbox_hit_accents.GetValue(), 0, 100),
++        .xbox_trigger_mix = std::clamp(s.xbox_trigger_mix.GetValue(), 0, 100),
 +        .gain = std::clamp(s.hd_rumble_gain.GetValue(), 25, 1000),
 +        .low_boost = std::clamp(s.hd_rumble_low_boost.GetValue(), 0, 100),
 +    };
@@ -1290,6 +1294,8 @@ index 0000000000..aeb5152a19
 +// Controllers RenHDrum drives, per kind, for the settings dialog
 +std::array<std::atomic<int>, 3> connected_count{};
 +std::atomic<int> last_connected_kind{-1};
++// Connected Xbox-style controllers that expose trigger motors
++std::atomic<int> xbox_trigger_pads{};
 +
 +} // namespace
 +
@@ -1327,6 +1333,9 @@ index 0000000000..aeb5152a19
 +    // Direct mode accents: the level to settle on once the kick ends
 +    std::array<std::uint16_t, 2> direct_target{};
 +    std::int64_t kick_until_us{};
++    // Direct mode triggers: the fine vibration of each side, and what was last sent
++    std::array<std::uint16_t, 2> trigger_target{};
++    std::array<std::uint16_t, 2> trigger_sent{};
 +
 +    std::mutex bt_dsp_mutex;
 +    SDL_hid_device* bt_hid{};
@@ -1794,6 +1803,9 @@ index 0000000000..aeb5152a19
 +    }
 +    state->kind = xbox_pad ? 2 : switch_pad ? 0 : 1;
 +    ++connected_count[state->kind];
++    if (state->xbox_triggers) {
++        ++xbox_trigger_pads;
++    }
 +    last_connected_kind = state->kind;
 +    return std::shared_ptr<RenHDrumPad>(new RenHDrumPad(std::move(state)));
 +}
@@ -1809,6 +1821,13 @@ index 0000000000..aeb5152a19
 +        }
 +    }
 +    return -1;
++}
++
++int GetRenHDrumXboxTriggers() {
++    if (connected_count[2].load() == 0) {
++        return -1;
++    }
++    return xbox_trigger_pads.load() > 0 ? 1 : 0;
 +}
 +
 +RenHDrumPad::RenHDrumPad(std::unique_ptr<Impl> impl_) : impl{std::move(impl_)} {}
@@ -1832,6 +1851,9 @@ index 0000000000..aeb5152a19
 +        had_xbox = impl->had_xbox;
 +        if (impl->kind >= 0) {
 +            --connected_count[impl->kind];
++            if (impl->xbox_triggers) {
++                --xbox_trigger_pads;
++            }
 +            impl->kind = -1;
 +        }
 +        triggers = impl->xbox_triggers;
@@ -1863,6 +1885,8 @@ index 0000000000..aeb5152a19
 +    bool engine_sample = false;
 +    bool send_direct = false;
 +    std::array<std::uint16_t, 2> direct{};
++    bool send_trigger = false;
++    std::array<std::uint16_t, 2> trigger{};
 +    {
 +        std::scoped_lock lock{impl->mutex};
 +        if (!impl->joystick) {
@@ -1894,11 +1918,23 @@ index 0000000000..aeb5152a19
 +            const auto kicked = [accent](std::uint16_t t) {
 +                return static_cast<std::uint16_t>(t + (65535.0f - t) * accent);
 +            };
++            // Triggers carry the fine vibration, left side on LT and right side on RT
++            const float trigger_mix = static_cast<float>(u.xbox_trigger_mix) / 100.0f;
++            const auto on_trigger = [trigger_mix](std::uint16_t v) {
++                return static_cast<std::uint16_t>(static_cast<float>(v) * trigger_mix);
++            };
++            const std::array<std::uint16_t, 2> trigger_full{to_motor(impl->direct_high[0]),
++                                                            to_motor(impl->direct_high[1])};
++            const std::array<std::uint16_t, 2> trigger_target{on_trigger(trigger_full[0]),
++                                                              on_trigger(trigger_full[1])};
 +            const bool kicking = impl->kick_until_us != 0 && now_us < impl->kick_until_us;
 +            if (!kicking && accent > 0.0f &&
 +                (target[0] - impl->direct_target[0] >= KickRise ||
 +                 target[1] - impl->direct_target[1] >= KickRise)) {
 +                impl->kick_until_us = now_us + KickUs;
++                trigger = {on_trigger(kicked(trigger_full[0])),
++                           on_trigger(kicked(trigger_full[1]))};
++                send_trigger = true;
 +                direct = {target[0] - impl->direct_target[0] >= KickRise ? kicked(target[0])
 +                                                                         : target[0],
 +                          target[1] - impl->direct_target[1] >= KickRise ? kicked(target[1])
@@ -1910,15 +1946,24 @@ index 0000000000..aeb5152a19
 +                    impl->kick_until_us = 0;
 +                    direct = target;
 +                    send_direct = true;
++                    trigger = trigger_target;
++                    send_trigger = true;
 +                }
 +            } else {
 +                impl->kick_until_us = 0;
 +                direct = target;
 +                send_direct = direct != impl->direct_sent;
++                trigger = trigger_target;
++                send_trigger = trigger != impl->trigger_sent;
 +            }
 +            impl->direct_target = target;
++            impl->trigger_target = trigger_target;
 +            if (send_direct) {
 +                impl->direct_sent = direct;
++            }
++            send_trigger = send_trigger && impl->xbox_triggers;
++            if (send_trigger) {
++                impl->trigger_sent = trigger;
 +            }
 +            handled = true;
 +        } else if (impl->xbox) {
@@ -1960,6 +2005,9 @@ index 0000000000..aeb5152a19
 +        // A stop always arrives as a zero; the duration only guards a lost one
 +        SDL_RumbleJoystick(joystick, direct[0], direct[1], 2000);
 +    }
++    if (send_trigger) {
++        SDL_RumbleJoystickTriggers(joystick, trigger[0], trigger[1], 2000);
++    }
 +    if (change.stop_engine) {
 +        SendNeutralPacket(joystick);
 +    }
@@ -1982,6 +2030,8 @@ index 0000000000..aeb5152a19
 +    std::uint32_t strength = 100;
 +    bool send_settle = false;
 +    std::array<std::uint16_t, 2> settle{};
++    bool send_settle_trigger = false;
++    std::array<std::uint16_t, 2> settle_trigger{};
 +    std::array<std::uint16_t, 4> motors{};
 +    {
 +        std::scoped_lock lock{impl->mutex};
@@ -2000,6 +2050,12 @@ index 0000000000..aeb5152a19
 +            settle = impl->direct_target;
 +            send_settle = settle != impl->direct_sent;
 +            impl->direct_sent = settle;
++            settle_trigger = impl->trigger_target;
++            send_settle_trigger =
++                impl->xbox_triggers && settle_trigger != impl->trigger_sent;
++            if (send_settle_trigger) {
++                impl->trigger_sent = settle_trigger;
++            }
 +        }
 +        send_xbox = impl->xbox && !impl->user.xbox_direct &&
 +                    Api().xbox_tick(impl->xbox, now_us, motors.data()) == 1;
@@ -2008,6 +2064,9 @@ index 0000000000..aeb5152a19
 +    }
 +    if (send_settle) {
 +        SDL_RumbleJoystick(joystick, settle[0], settle[1], 2000);
++    }
++    if (send_settle_trigger) {
++        SDL_RumbleJoystickTriggers(joystick, settle_trigger[0], settle_trigger[1], 2000);
 +    }
 +    if (send_xbox) {
 +        // RenHDrum's mix tops out near 10 % of the range (tuned on the Xbox One S motors);
@@ -2056,6 +2115,10 @@ index 0000000000..aeb5152a19
 +    return -1;
 +}
 +
++int GetRenHDrumXboxTriggers() {
++    return -1;
++}
++
 +struct RenHDrumPad::Impl {};
 +
 +std::shared_ptr<RenHDrumPad> RenHDrumPad::Create(SDL_Joystick*, SDL_Gamepad*) {
@@ -2078,10 +2141,10 @@ index 0000000000..aeb5152a19
 +#endif // ENABLE_RENHDRUM
 diff --git a/src/input_common/drivers/renhdrum_pad.h b/src/input_common/drivers/renhdrum_pad.h
 new file mode 100644
-index 0000000000..ce5b0a2cfa
+index 0000000000..47d4e2109e
 --- /dev/null
 +++ b/src/input_common/drivers/renhdrum_pad.h
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,64 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -2106,6 +2169,10 @@ index 0000000000..ce5b0a2cfa
 +/// Kind of the controller RenHDrum connected most recently and still drives: 0 Switch
 +/// controller, 1 DualSense, 2 Xbox style, or -1 when none.
 +int GetRenHDrumConnectedKind();
++
++/// For connected Xbox-style controllers: 1 when one exposes trigger motors, 0 when none does,
++/// -1 when no Xbox-style controller is connected.
++int GetRenHDrumXboxTriggers();
 +
 +/**
 + * Vibration for one SDL controller through RenHDrum (https://github.com/trzz1214/RenHDrum):
@@ -2349,10 +2416,10 @@ index 2052b63394..da57cc2efc 100644
 +endif()
 diff --git a/src/yuzu/configuration/configure_hd_rumble.cpp b/src/yuzu/configuration/configure_hd_rumble.cpp
 new file mode 100644
-index 0000000000..41ccb094f3
+index 0000000000..e5620b0f8d
 --- /dev/null
 +++ b/src/yuzu/configuration/configure_hd_rumble.cpp
-@@ -0,0 +1,380 @@
+@@ -0,0 +1,395 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -2602,7 +2669,7 @@ index 0000000000..41ccb094f3
 +    xbox_mode = new QComboBox;
 +    xbox_mode->addItem(tr("RenHDrum (smart: richer effects, best on official Xbox controllers)"),
 +                       0);
-+    xbox_mode->addItem(tr("Direct (stronger: raw motor power, less nuance)"), 1);
++    xbox_mode->addItem(tr("Direct (stronger: full motor power)"), 1);
 +    xbox_mode->setToolTip(tr("RenHDrum: richer effects, made for official Xbox controllers.\n"
 +                             "Direct: full motor power, simpler feel."));
 +    form->addRow(xbox_enabled);
@@ -2633,6 +2700,16 @@ index 0000000000..41ccb094f3
 +                 percent_row(xbox_accents_slider, xbox_accents,
 +                             tr("A short burst when a hit starts, so quick taps are felt. "
 +                                "Direct mode.")));
++    form->addRow(tr("Trigger rumble"),
++                 percent_row(xbox_trigger_slider, xbox_trigger,
++                             tr("Fine vibration on the triggers, on controllers that have "
++                                "trigger motors. Direct mode.")));
++    // Whether the controller in use has trigger motors, known when the dialog opens
++    xbox_triggers_state = InputCommon::GetRenHDrumXboxTriggers();
++    xbox_no_triggers = new QLabel(tr("This controller has no trigger motors."));
++    xbox_no_triggers->setStyleSheet(QStringLiteral("color: palette(mid);"));
++    xbox_no_triggers->setVisible(xbox_triggers_state == 0);
++    form->addRow(QString{}, xbox_no_triggers);
 +    layout->addWidget(group);
 +
 +    layout->addWidget(MakeNote(tr("Trigger rumble works only with official Xbox controllers. "
@@ -2663,6 +2740,7 @@ index 0000000000..41ccb094f3
 +    xbox_mode->setCurrentIndex(std::clamp(s.xbox_rumble_mode.GetValue(), 0, 1));
 +    xbox_detail->setValue(s.xbox_detail_mix.GetValue());
 +    xbox_accents->setValue(s.xbox_hit_accents.GetValue());
++    xbox_trigger->setValue(s.xbox_trigger_mix.GetValue());
 +    UpdateEnabledState();
 +}
 +
@@ -2686,6 +2764,7 @@ index 0000000000..41ccb094f3
 +    xbox_mode->setCurrentIndex(0);
 +    xbox_detail->setValue(50);
 +    xbox_accents->setValue(50);
++    xbox_trigger->setValue(20);
 +    UpdateEnabledState();
 +}
 +
@@ -2707,6 +2786,8 @@ index 0000000000..41ccb094f3
 +    xbox_detail->setEnabled(direct);
 +    xbox_accents_slider->setEnabled(direct);
 +    xbox_accents->setEnabled(direct);
++    xbox_trigger_slider->setEnabled(direct && xbox_triggers_state != 0);
++    xbox_trigger->setEnabled(direct && xbox_triggers_state != 0);
 +}
 +
 +void ConfigureHdRumble::ApplyConfiguration() {
@@ -2732,13 +2813,14 @@ index 0000000000..41ccb094f3
 +    s.xbox_rumble_mode.SetValue(xbox_mode->currentData().toInt());
 +    s.xbox_detail_mix.SetValue(xbox_detail->value());
 +    s.xbox_hit_accents.SetValue(xbox_accents->value());
++    s.xbox_trigger_mix.SetValue(xbox_trigger->value());
 +}
 diff --git a/src/yuzu/configuration/configure_hd_rumble.h b/src/yuzu/configuration/configure_hd_rumble.h
 new file mode 100644
-index 0000000000..e13599dc43
+index 0000000000..5437983bb8
 --- /dev/null
 +++ b/src/yuzu/configuration/configure_hd_rumble.h
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,73 @@
 +// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -2805,6 +2887,10 @@ index 0000000000..e13599dc43
 +    QSpinBox* xbox_detail{};
 +    QSlider* xbox_accents_slider{};
 +    QSpinBox* xbox_accents{};
++    QSlider* xbox_trigger_slider{};
++    QSpinBox* xbox_trigger{};
++    QLabel* xbox_no_triggers{};
++    int xbox_triggers_state{-1};
 +    QSlider* xbox_strength_slider{};
 +    QSpinBox* xbox_strength{};
 +};
